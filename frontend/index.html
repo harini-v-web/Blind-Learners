@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>VOICE4BLIND — Empowering Vision Through Voice</title>
+  <link rel="stylesheet" href="style.css"/>
+</head>
+<body>
+
+<!-- ===== SCREEN: WELCOME ===== -->
+<div id="screen-welcome" class="screen active">
+  <nav class="navbar">
+    <div class="logo">VOICE4<span>BLIND</span></div>
+    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
+    <div class="status-dot" id="nav-status">
+      <span class="dot listening"></span>
+      <span id="nav-status-text">Connected</span>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <h1 class="hero-title">Welcome to<br><span class="accent">VOICE4BLIND</span></h1>
+    <p class="hero-sub">A fully voice-controlled document reader powered by AI. No clicking, no typing — just speak naturally.</p>
+
+    <div class="mic-container" id="mic-welcome">
+      <div class="mic-ring outer"></div>
+      <div class="mic-ring middle"></div>
+      <div class="mic-circle">
+        <svg class="mic-icon" viewBox="0 0 24 24" fill="none">
+          <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z" fill="white"/>
+          <path d="M19 12C19 15.87 15.87 19 12 19C8.13 19 5 15.87 5 12H3C3 16.97 6.94 21.07 12 21V23H14V21C19.06 21 23 16.97 23 12H21" fill="white"/>
+        </svg>
+      </div>
+    </div>
+
+    <div class="voice-status-box" id="voice-status-box">
+      <div class="listening-indicator">
+        <span class="pulse-dot"></span>
+        <span id="status-label">Listening…</span>
+      </div>
+      <p id="transcript-display" class="transcript"></p>
+    </div>
+
+    <div class="assistant-bubble" id="assistant-bubble">
+      <div class="bubble-icon">🔊</div>
+      <p id="assistant-text">Initializing voice assistant…</p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SCREEN: LOGIN ===== -->
+<div id="screen-login" class="screen">
+  <nav class="navbar">
+    <div class="logo">VOICE4<span>BLIND</span></div>
+    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
+    <div class="status-dot">
+      <span class="dot listening"></span>
+      <span>Listening</span>
+    </div>
+  </nav>
+
+  <div class="login-container">
+    <div class="login-card">
+      <div class="login-icon">🎤</div>
+      <h2>Voice Login</h2>
+      <p class="login-hint">Say your username when prompted</p>
+
+      <div class="login-fields">
+        <div class="field-row">
+          <label>Username</label>
+          <div class="field-display" id="field-username">—</div>
+        </div>
+        <div class="field-row">
+          <label>Password</label>
+          <div class="field-display" id="field-password">—</div>
+        </div>
+      </div>
+
+      <div class="mic-small-container">
+        <div class="mic-ring outer small"></div>
+        <div class="mic-ring middle small"></div>
+        <div class="mic-circle small">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z" fill="white"/>
+            <path d="M19 12C19 15.87 15.87 19 12 19C8.13 19 5 15.87 5 12H3C3 16.97 6.94 21.07 12 21V23H14V21C19.06 21 23 16.97 23 12H21" fill="white"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="assistant-bubble" id="login-bubble">
+        <div class="bubble-icon">🔊</div>
+        <p id="login-assistant-text">Please say your username.</p>
+      </div>
+      <p id="login-transcript" class="transcript center-text"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SCREEN: DASHBOARD ===== -->
+<div id="screen-dashboard" class="screen">
+  <nav class="navbar">
+    <div class="logo">VOICE4<span>BLIND</span></div>
+    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
+    <div class="nav-right">
+      <span id="dashboard-user" class="user-badge">User</span>
+      <div class="status-dot">
+        <span class="dot listening"></span>
+        <span>Listening</span>
+      </div>
+    </div>
+  </nav>
+
+  <div class="dashboard-layout">
+    <div class="dashboard-left">
+      <h2 class="section-title">Document Dashboard</h2>
+      <p class="section-sub">Say a file name to open it. I will guide you.</p>
+      <div class="file-list" id="file-list"></div>
+      <div class="upload-hint"><span>📂</span><p>Say "upload file" or "scan documents"</p></div>
+    </div>
+
+    <div class="dashboard-right">
+      <div class="mic-container" id="mic-dashboard">
+        <div class="mic-ring outer"></div>
+        <div class="mic-ring middle"></div>
+        <div class="mic-circle">🎤</div>
+      </div>
+      <div class="assistant-bubble" id="dashboard-bubble">
+        <div class="bubble-icon">🔊</div>
+        <p id="dashboard-assistant-text">Say "scan documents" to find your files.</p>
+      </div>
+      <p id="dashboard-transcript" class="transcript center-text"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ===== SCREEN: READER ===== -->
+<div id="screen-reader" class="screen">
+  <nav class="navbar">
+    <div class="logo">VOICE4<span>BLIND</span></div>
+    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
+    <div class="nav-right">
+      <span id="reader-filename" class="file-badge">Document</span>
+      <div class="status-dot">
+        <span class="dot listening"></span>
+        <span id="reader-status-text">Listening</span>
+      </div>
+    </div>
+  </nav>
+
+  <div class="reader-layout">
+    <div class="reader-left">
+      <div class="reader-info-bar">
+        <span id="reader-lang-badge" class="lang-badge">EN</span>
+        <span id="reader-page-info" class="page-info">Page 1</span>
+        <span id="reader-speed-badge" class="speed-badge">Normal Speed</span>
+      </div>
+      <div class="reader-content-box">
+        <p id="reader-content-text" class="reader-text">Document content will appear here…</p>
+      </div>
+      <div class="reader-progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+      <p class="progress-label" id="progress-label">0% read</p>
+    </div>
+
+    <div class="reader-right">
+      <div class="mic-container" id="mic-reader"><div class="mic-circle">🎤</div></div>
+      <div class="assistant-bubble" id="reader-bubble">
+        <div class="bubble-icon">🔊</div>
+        <p id="reader-assistant-text">Say "read" to begin reading.</p>
+      </div>
+      <      <p id="reader-transcript" class="transcript center-text"></p>
+
+      <div class="commands-hint reader-commands">
+        <h3>Voice Commands</h3>
+        <ul>
+          <li>▶️ "Read" / "Start reading"</li>
+          <li>⏸️ "Pause" / "Stop"</li>
+          <li>▶️ "Resume" / "Continue"</li>
+          <li>🔁 "Repeat"</li>
+          <li>⏩ "Next"</li>
+          <li>⏮️ "Previous"</li>
+          <li>📝 "Summarize"</li>
+          <li>💡 "Explain"</li>
+          <li>📌 "Important points"</li>
+          <li>🐢 "Slower" / "Faster"</li>
+          <li>🔊 "Louder" / "Quieter"</li>
+          <li>🖼️ "Describe"</li>
+          <li>🌍 Language Switch (Hindi, Tamil, Telugu, etc.)</li>
+          <li>🚪 "Logout"</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Audio element for TTS playback -->
+<audio id="tts-audio" style="display:none;"></audio>
+
+<script src="app.js"></script>
+</body>
+</html>
