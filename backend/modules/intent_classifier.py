@@ -1,4 +1,5 @@
 """
+VOICE4BLIND — Intent Classifier
 Detects user intent from transcribed speech using pattern matching
 and optional embedding-based fallback.
 """
@@ -13,17 +14,23 @@ class Intent:
     confidence: float
     payload: Optional[dict] = None
 
-# ─────────────────────────────────────────────
+
+# ─────────────────────────────────────────────────────────────────────────────
 # INTENT RULES
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 INTENT_RULES = [
+    # --- Greeting ---
     ("greeting",    [r'\b(hi|hello|hey|start|ready)\b']),
+    # --- Confirmation ---
     ("confirm",     [r'\b(yes|correct|right|confirm|ok|okay|sure|haan|ha|bilkul)\b']),
     ("deny",        [r'\b(no|wrong|repeat|again|nahi|nope|incorrect)\b']),
+    # --- Login ---
     ("set_username",[r'\b(username|user name|my name is|name is|i am|iam)\b']),
     ("set_password",[r'\b(password|pass word|password is|pass is)\b']),
+    # --- File ops ---
     ("scan_files",  [r'\b(scan|list|find|search|discover|show files|upload|documents|files)\b']),
     ("open_file",   [r'\b(open|load|select|choose|read file)\b']),
+    # --- Reading control ---
     ("start_read",  [r'\b(start reading|begin reading|read|padhna shuru|odhu|chadhu|start)\b']),
     ("pause",       [r'\b(stop|pause|wait|ruko|nikol|nirthu|hold on)\b']),
     ("resume",      [r'\b(resume|continue|chaliye|munde|go on|carry on)\b']),
@@ -39,12 +46,11 @@ INTENT_RULES = [
     ("faster",      [r'\b(faster|speed up|jaldi|bega|veg|read fast)\b']),
     ("clarify",     [r'\b(didn.t understand|not clear|confused|samjha nahi|puriyala|artagalilla|unclear)\b']),
     ("describe",    [r'\b(describe|image|graph|chart|picture|table|diagram|figure)\b']),
+    # --- Logout ---
     ("logout",      [r'\b(logout|log out|exit|bye|goodbye|close|quit)\b']),
 ]
 
-# ─────────────────────────────────────────────
-# LANGUAGE TRIGGERS
-# ─────────────────────────────────────────────
+# Language trigger patterns
 LANG_PATTERNS = {
     "english":   [r'english', r'angrezi'],
     "hindi":     [r'hindi', r'हिंदी', r'hindhi'],
@@ -66,14 +72,12 @@ LANG_TRIGGERS = [
     r'mein', r'lo', r'madhye', r'il'
 ]
 
-# ─────────────────────────────────────────────
-# CLASSIFIER
-# ─────────────────────────────────────────────
+
 def classify(text: str) -> Intent:
     """Classify the intent of a transcribed voice command."""
     t = text.lower().strip()
 
-    # 1. Language change
+    # 1. Check language change first
     lang_intent = _detect_language_change(t)
     if lang_intent:
         return lang_intent
@@ -84,38 +88,49 @@ def classify(text: str) -> Intent:
             if re.search(pattern, t):
                 return Intent(name=intent_name, confidence=0.9)
 
-    # 3. Simple fallback (Copilot skeleton)
-    if re.search(r'\bhi|hello|ready\b', t):
-        return Intent("greeting", 0.9)
-
     return Intent(name="unknown", confidence=0.0)
 
+
 def _detect_language_change(text: str) -> Optional[Intent]:
+    """Detect language switch commands."""
     has_trigger = any(re.search(p, text) for p in LANG_TRIGGERS)
     for lang, patterns in LANG_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, text):
-                return Intent(name="change_language", confidence=0.95, payload={"language": lang})
+                # Language word found — accept even without explicit trigger
+                return Intent(
+                    name="change_language",
+                    confidence=0.95,
+                    payload={"language": lang}
+                )
     return None
 
-# ─────────────────────────────────────────────
-# EXTRACTION HELPERS
-# ─────────────────────────────────────────────
+
 def extract_username(text: str) -> str:
+    """Extract username from 'username Harini' style input."""
     t = re.sub(r'\b(username|user name|my name is|name is|i am|iam|is|my|call me)\b', '', text, flags=re.I).strip()
     words = t.split()
     return words[0] if words else t
 
+
 def extract_password(text: str) -> str:
+    """Extract password from 'password 1234' style input."""
     t = re.sub(r'\b(password|pass word|password is|pass is|is|my password)\b', '', text, flags=re.I).strip()
-    DIGIT_WORDS = {'zero':'0','one':'1','two':'2','three':'3','four':'4','five':'5','six':'6','seven':'7','eight':'8','nine':'9'}
+    # Normalize spoken digits: "one two three four" → "1234"
+    DIGIT_WORDS = {
+        'zero':'0','one':'1','two':'2','three':'3','four':'4',
+        'five':'5','six':'6','seven':'7','eight':'8','nine':'9',
+    }
     for word, digit in DIGIT_WORDS.items():
         t = re.sub(rf'\b{word}\b', digit, t)
     return t.replace(' ', '')
 
+
 def extract_file_number(text: str) -> Optional[int]:
+    """Extract file number from 'open file 3' style input."""
     m = re.search(r'\b([1-9])\b', text)
-    if m: return int(m.group(1)) - 1
+    if m:
+        return int(m.group(1)) - 1  # 0-indexed
     WORD_NUMS = {'first':0,'second':1,'third':2,'fourth':3,'fifth':4}
     for word, idx in WORD_NUMS.items():
         if re.search(rf'\b{word}\b', text, re.I):

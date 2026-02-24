@@ -1,0 +1,37 @@
+# VOICE4BLIND — Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# ─── Core Backend ──────────────────────────────────────────────────────────
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9          # file uploads
+websockets>=12.0
+pydantic>=2.0.0
+
+# ─── Document Processing ────────────────────────────────────────────────────
+pymupdf>=1.24.0                  # PDF: fitz  (pip install pymupdf)
+python-docx>=1.1.0               # DOCX support
+ebooklib>=0.18                   # EPUB support
+beautifulsoup4>=4.12.0           # HTML/EPUB text parsing
+lxml>=5.0.0                      # XML/HTML parser
+
+# ─── Text-to-Speech ─────────────────────────────────────────────────────────
+gtts>=2.5.0                      # Google TTS (free, needs internet)
+pyttsx3>=2.90                    # Offline TTS fallback
+# azure-cognitiveservices-speech   # Azure Neural TTS (optional — needs key)
+
+# ─── Speech-to-Text (optional server-side) ──────────────────────────────────
+# openai-whisper                  # Local Whisper STT (GPU recommended)
+# SpeechRecognition>=3.10.0       # Google STT wrapper
+
+# ─── AI / LLM ───────────────────────────────────────────────────────────────
+openai>=1.30.0                   # GPT-4o summarization (needs OPENAI_API_KEY)
+
+# ─── Language Detection ─────────────────────────────────────────────────────
+langdetect>=1.0.9                # Automatic language detection
+
+# ─── Utilities ──────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0             # .env file support
+aiofiles>=23.0.0                 # Async file I/O
+httpx>=0.27.0                    # Async HTTP client
+Pillow>=10.0.0                   # Image processing

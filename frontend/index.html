@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8"/>
+  <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>VOICE4BLIND — Empowering Vision Through Voice</title>
-  <link rel="stylesheet" href="style.css"/>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
@@ -97,7 +97,7 @@
   </div>
 </div>
 
-<!-- ===== SCREEN: DASHBOARD ===== -->
+<!-- ===== SCREEN: DASHBOARD / FILE SELECTION ===== -->
 <div id="screen-dashboard" class="screen">
   <nav class="navbar">
     <div class="logo">VOICE4<span>BLIND</span></div>
@@ -115,21 +115,44 @@
     <div class="dashboard-left">
       <h2 class="section-title">Document Dashboard</h2>
       <p class="section-sub">Say a file name to open it. I will guide you.</p>
-      <div class="file-list" id="file-list"></div>
-      <div class="upload-hint"><span>📂</span><p>Say "upload file" or "scan documents"</p></div>
+
+      <div class="file-list" id="file-list">
+        <!-- Files populated dynamically -->
+      </div>
+
+      <div class="upload-hint">
+        <span>📂</span>
+        <p>Say "upload file" or "scan documents" to find files</p>
+      </div>
     </div>
 
     <div class="dashboard-right">
       <div class="mic-container" id="mic-dashboard">
         <div class="mic-ring outer"></div>
         <div class="mic-ring middle"></div>
-        <div class="mic-circle">🎤</div>
+        <div class="mic-circle">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z" fill="white"/>
+            <path d="M19 12C19 15.87 15.87 19 12 19C8.13 19 5 15.87 5 12H3C3 16.97 6.94 21.07 12 21V23H14V21C19.06 21 23 16.97 23 12H21" fill="white"/>
+          </svg>
+        </div>
       </div>
+
       <div class="assistant-bubble" id="dashboard-bubble">
         <div class="bubble-icon">🔊</div>
         <p id="dashboard-assistant-text">Say "scan documents" to find your files.</p>
       </div>
       <p id="dashboard-transcript" class="transcript center-text"></p>
+
+      <div class="commands-hint">
+        <h3>Voice Commands</h3>
+        <ul>
+          <li>📂 "Scan documents"</li>
+          <li>📄 "Open [filename]"</li>
+          <li>🔄 "List files again"</li>
+          <li>🚪 "Logout"</li>
+        </ul>
+      </div>
     </div>
   </div>
 </div>
@@ -155,37 +178,64 @@
         <span id="reader-page-info" class="page-info">Page 1</span>
         <span id="reader-speed-badge" class="speed-badge">Normal Speed</span>
       </div>
-      <div class="reader-content-box">
-        <p id="reader-content-text" class="reader-text">Document content will appear here…</p>
+
+      <div class="reader-content-box" id="reader-content-box">
+        <p id="reader-content-text" class="reader-text">Document content will appear here as it is read aloud…</p>
+        <div class="reading-highlight" id="reading-highlight"></div>
       </div>
-      <div class="reader-progress-bar"><div class="progress-fill" id="progress-fill"></div></div>
+
+      <div class="reader-progress-bar">
+        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
+      </div>
       <p class="progress-label" id="progress-label">0% read</p>
     </div>
 
     <div class="reader-right">
-      <div class="mic-container" id="mic-reader"><div class="mic-circle">🎤</div></div>
+      <div class="mic-container" id="mic-reader">
+        <div class="mic-ring outer"></div>
+        <div class="mic-ring middle"></div>
+        <div class="mic-circle">
+          <svg class="mic-icon" viewBox="0 0 24 24" fill="none">
+            <path d="M12 1C10.34 1 9 2.34 9 4V12C9 13.66 10.34 15 12 15C13.66 15 15 13.66 15 12V4C15 2.34 13.66 1 12 1Z" fill="white"/>
+            <path d="M19 12C19 15.87 15.87 19 12 19C8.13 19 5 15.87 5 12H3C3 16.97 6.94 21.07 12 21V23H14V21C19.06 21 23 16.97 23 12H21" fill="white"/>
+          </svg>
+        </div>
+      </div>
+
       <div class="assistant-bubble" id="reader-bubble">
         <div class="bubble-icon">🔊</div>
         <p id="reader-assistant-text">Say "read" to begin reading.</p>
       </div>
-           <p id="reader-transcript" class="transcript center-text"></p>
+      <p id="reader-transcript" class="transcript center-text"></p>
 
       <div class="commands-hint reader-commands">
         <h3>Voice Commands</h3>
         <ul>
           <li>▶️ "Read" / "Start reading"</li>
-          <li>⏸️ "Pause" / "Stop"</li>
+          <li>⏸️ "Pause" / "Stop" / "Wait"</li>
           <li>▶️ "Resume" / "Continue"</li>
-          <li>🔁 "Repeat"</li>
-          <li>⏩ "Next"</li>
-          <li>⏮️ "Previous"</li>
+          <li>🔁 "Repeat" / "Say again"</li>
+          <li>⏩ "Next" / "Skip"</li>
+          <li>⏮️ "Previous" / "Back"</li>
           <li>📝 "Summarize"</li>
-          <li>💡 "Explain"</li>
+          <li>💡 "Explain" / "Simple words"</li>
           <li>📌 "Important points"</li>
-          <li>🐢 "Slower" / "Faster"</li>
+          <li>🐢 "Read slower" / "Faster"</li>
           <li>🔊 "Louder" / "Quieter"</li>
-          <li>🖼️ "Describe"</li>
-          <li>🌍 Language Switch (Hindi, Tamil, Telugu, etc.)</li>
+          <li>🖼️ "Describe" (for images)</li>
+          <li>🌍 Language Switch:</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Kannadakke badalisu"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Telugulo chappu"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Tamilil pesi"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Hindi mein bolo"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Malayalatthil paranju"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Marathit bola"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Banglay bolo"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Gujaratima bolo"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Punjabi vich bolo"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Urdu mein bolo"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Odialare kahu"</li>
+          <li>&nbsp;&nbsp;🇮🇳 "Asamiyat kowa"</li>
           <li>🚪 "Logout"</li>
         </ul>
       </div>
