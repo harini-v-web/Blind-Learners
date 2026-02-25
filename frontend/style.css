@@ -402,3 +402,213 @@ html, body {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
+/* ================================================================
+   FACE RECOGNITION SCREEN STYLES
+   ================================================================ */
+
+/* ── Face card (extends login-card) ── */
+.face-card {
+  position: relative;
+  overflow: hidden;
+}
+.face-card::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at 50% 28%, rgba(14,165,233,0.10) 0%, transparent 68%);
+  pointer-events: none;
+}
+
+/* ── Animated container ── */
+.face-container {
+  position: relative;
+  width: 160px;
+  height: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 8px auto 28px;
+}
+
+.face-ring {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid var(--purple-main);
+}
+.face-ring.outer  { width: 160px; height: 160px; opacity: 0.3; animation: face-ripple 2.4s infinite ease-out; }
+.face-ring.middle { width: 124px; height: 124px; opacity: 0.5; animation: face-ripple 2.4s 0.55s infinite ease-out; }
+
+@keyframes face-ripple {
+  0%   { transform: scale(0.88); opacity: 0.55; }
+  100% { transform: scale(1.20); opacity: 0; }
+}
+
+/* ── Face circle ── */
+.face-circle {
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #38bdf8, #0284c7 60%, #0c4a6e);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 36px rgba(14,165,233,0.55), 0 0 70px rgba(14,165,233,0.25);
+  position: relative;
+  z-index: 2;
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Scanning — cyan pulse */
+.face-circle.scanning {
+  box-shadow: 0 0 52px rgba(34,211,238,0.60), 0 0 96px rgba(34,211,238,0.28);
+  animation: face-scan-pulse 0.75s infinite alternate;
+}
+/* Success — green */
+.face-circle.success {
+  box-shadow: 0 0 52px rgba(52,211,153,0.65), 0 0 96px rgba(52,211,153,0.30);
+  background: radial-gradient(circle at 40% 35%, #6ee7b7, #059669 60%, #064e3b);
+}
+/* Wrong-person error — orange */
+.face-circle.wrong-person {
+  box-shadow: 0 0 52px rgba(251,146,60,0.65), 0 0 96px rgba(251,146,60,0.28);
+  background: radial-gradient(circle at 40% 35%, #fdba74, #ea580c 60%, #7c2d12);
+  animation: face-shake 0.5s ease;
+}
+/* Not-registered error — red */
+.face-circle.error {
+  box-shadow: 0 0 52px rgba(239,68,68,0.65), 0 0 96px rgba(239,68,68,0.30);
+  background: radial-gradient(circle at 40% 35%, #fca5a5, #dc2626 60%, #7f1d1d);
+  animation: face-shake 0.5s ease;
+}
+
+@keyframes face-scan-pulse {
+  from { transform: scale(1); }
+  to   { transform: scale(1.07); }
+}
+@keyframes face-shake {
+  0%,100% { transform: translateX(0); }
+  20%     { transform: translateX(-7px); }
+  40%     { transform: translateX(7px); }
+  60%     { transform: translateX(-4px); }
+  80%     { transform: translateX(4px); }
+}
+
+/* ── Face SVG icon ── */
+.face-icon {
+  width: 52px;
+  height: 52px;
+}
+
+/* ── Sweeping scan line ── */
+.face-scan-line {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 84px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #22d3ee, transparent);
+  border-radius: 2px;
+  z-index: 3;
+  opacity: 0;
+  top: 40px;
+}
+.face-scan-line.active {
+  opacity: 1;
+  animation: face-scan-move 1.3s ease-in-out infinite;
+}
+@keyframes face-scan-move {
+  0%   { top: 28px;  opacity: 0.95; }
+  50%  { top: 112px; opacity: 0.95; }
+  100% { top: 28px;  opacity: 0.95; }
+}
+
+/* ── Viewfinder bracket corners ── */
+.vf-corner {
+  position: absolute;
+  width: 16px;
+  height: 16px;
+  border-color: #22d3ee;
+  border-style: solid;
+  opacity: 0;
+  transition: opacity 0.4s;
+  z-index: 4;
+}
+.face-container.active-vf .vf-corner { opacity: 0.8; }
+.vf-tl { top: 12px; left: 12px;  border-width: 2.5px 0 0 2.5px; }
+.vf-tr { top: 12px; right: 12px; border-width: 2.5px 2.5px 0 0; }
+.vf-bl { bottom: 12px; left: 12px;  border-width: 0 0 2.5px 2.5px; }
+.vf-br { bottom: 12px; right: 12px; border-width: 0 2.5px 2.5px 0; }
+
+/* ── Titles ── */
+.face-title {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.5rem;
+  color: #38bdf8;
+  margin-bottom: 8px;
+}
+.face-subtitle {
+  color: var(--text-muted);
+  font-size: 0.92rem;
+  margin-bottom: 20px;
+}
+
+/* ── Status badge ── */
+.face-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(14,165,233,0.10);
+  border: 1px solid rgba(14,165,233,0.30);
+  border-radius: 50px;
+  padding: 7px 18px;
+  font-size: 0.85rem;
+  color: var(--white);
+  margin-bottom: 22px;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
+}
+.face-status-badge.scanning-state {
+  background: rgba(34,211,238,0.10);
+  border-color: rgba(34,211,238,0.40);
+  color: #22d3ee;
+}
+.face-status-badge.success-state {
+  background: rgba(52,211,153,0.12);
+  border-color: rgba(52,211,153,0.50);
+  color: #6ee7b7;
+}
+.face-status-badge.wrong-person-state {
+  background: rgba(251,146,60,0.10);
+  border-color: rgba(251,146,60,0.45);
+  color: #fdba74;
+}
+.face-status-badge.error-state {
+  background: rgba(239,68,68,0.10);
+  border-color: rgba(239,68,68,0.40);
+  color: #fca5a5;
+}
+
+/* ── Dot inside badge ── */
+.face-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #38bdf8;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.face-status-dot.pulse        { background: #38bdf8; animation: blink 1.4s infinite; }
+.face-status-dot.scanning     { background: #22d3ee; animation: blink 0.65s infinite; }
+.face-status-dot.success      { background: #6ee7b7; animation: none; }
+.face-status-dot.wrong-person { background: #fdba74; animation: none; }
+.face-status-dot.error-dot    { background: #f87171; animation: none; }
+
+/* ── Hidden camera video + canvas ── */
+.face-video,
+.face-canvas {
+  display: none;          /* hidden — we use the camera silently in the background */
+}
+
+/* ── Assistant bubble tweak ── */
+.face-bubble {
+  max-width: 440px;
+}

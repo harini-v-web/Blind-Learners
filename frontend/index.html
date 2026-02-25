@@ -97,6 +97,81 @@
   </div>
 </div>
 
+<!-- ===== SCREEN: FACE RECOGNITION ===== -->
+<div id="screen-face" class="screen">
+  <nav class="navbar">
+    <div class="logo">VOICE4<span>BLIND</span></div>
+    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
+    <div class="status-dot" id="face-nav-status">
+      <span class="dot listening" id="face-nav-dot"></span>
+      <span id="face-nav-status-text">Scanning</span>
+    </div>
+  </nav>
+
+  <div class="login-container">
+    <div class="login-card face-card">
+
+      <!-- Face icon with camera viewfinder + animated rings -->
+      <div class="face-container" id="face-container">
+        <div class="face-ring outer"  id="face-ring-outer"></div>
+        <div class="face-ring middle" id="face-ring-middle"></div>
+        <div class="face-circle" id="face-circle">
+          <!-- Face / camera SVG icon -->
+          <svg class="face-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <!-- Head outline -->
+            <ellipse cx="32" cy="27" rx="16" ry="18" stroke="white" stroke-width="2.8" stroke-linecap="round"/>
+            <!-- Left eye -->
+            <circle cx="25" cy="23" r="2.5" fill="white"/>
+            <!-- Right eye -->
+            <circle cx="39" cy="23" r="2.5" fill="white"/>
+            <!-- Nose -->
+            <path d="M32 26 L30 31 Q32 33 34 31 Z" fill="white" opacity="0.7"/>
+            <!-- Smile -->
+            <path d="M25 34 Q32 40 39 34" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+            <!-- Shoulders / body base hint -->
+            <path d="M12 58 Q16 48 32 46 Q48 48 52 58" stroke="white" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+            <!-- Viewfinder corners (top-left) -->
+            <path d="M6 14 L6 6 L14 6" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
+            <!-- Viewfinder corners (top-right) -->
+            <path d="M58 14 L58 6 L50 6" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
+            <!-- Viewfinder corners (bottom-left) -->
+            <path d="M6 50 L6 58 L14 58" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
+            <!-- Viewfinder corners (bottom-right) -->
+            <path d="M58 50 L58 58 L50 58" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
+          </svg>
+        </div>
+        <!-- Horizontal scan line that sweeps the face -->
+        <div class="face-scan-line" id="face-scan-line"></div>
+        <!-- Corner viewfinder brackets overlaid on the container -->
+        <div class="vf-corner vf-tl"></div>
+        <div class="vf-corner vf-tr"></div>
+        <div class="vf-corner vf-bl"></div>
+        <div class="vf-corner vf-br"></div>
+      </div>
+
+      <h2 class="face-title" id="face-title">Face Recognition</h2>
+      <p class="face-subtitle" id="face-subtitle">Look directly at the camera</p>
+
+      <!-- Status badge -->
+      <div class="face-status-badge" id="face-status-badge">
+        <span class="face-status-dot pulse" id="face-status-dot"></span>
+        <span id="face-status-label">Waiting to scan face…</span>
+      </div>
+
+      <!-- Live camera feed (hidden behind icon when idle, shown during scan) -->
+      <video id="face-video" class="face-video" autoplay muted playsinline></video>
+      <canvas id="face-canvas" class="face-canvas"></canvas>
+
+      <!-- Voice assistant bubble -->
+      <div class="assistant-bubble face-bubble" id="face-bubble">
+        <div class="bubble-icon">🔊</div>
+        <p id="face-assistant-text">Initializing face recognition…</p>
+      </div>
+
+    </div>
+  </div>
+</div>
+
 <!-- ===== SCREEN: DASHBOARD / FILE SELECTION ===== -->
 <div id="screen-dashboard" class="screen">
   <nav class="navbar">
@@ -211,31 +286,15 @@
       <div class="commands-hint reader-commands">
         <h3>Voice Commands</h3>
         <ul>
-          <li>▶️ "Read" / "Start reading"</li>
-          <li>⏸️ "Pause" / "Stop" / "Wait"</li>
-          <li>▶️ "Resume" / "Continue"</li>
+          <li>▶️ "Start reading" / "Read"</li>
+          <li>⏸️ "Pause" / "Wait" / "Stop"</li>
           <li>🔁 "Repeat" / "Say again"</li>
-          <li>⏩ "Next" / "Skip"</li>
-          <li>⏮️ "Previous" / "Back"</li>
+          <li>⏩ "Next chapter" / "Skip"</li>
           <li>📝 "Summarize"</li>
-          <li>💡 "Explain" / "Simple words"</li>
+          <li>💡 "Explain simply"</li>
           <li>📌 "Important points"</li>
-          <li>🐢 "Read slower" / "Faster"</li>
-          <li>🔊 "Louder" / "Quieter"</li>
-          <li>🖼️ "Describe" (for images)</li>
-          <li>🌍 Language Switch:</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Kannadakke badalisu"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Telugulo chappu"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Tamilil pesi"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Hindi mein bolo"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Malayalatthil paranju"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Marathit bola"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Banglay bolo"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Gujaratima bolo"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Punjabi vich bolo"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Urdu mein bolo"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Odialare kahu"</li>
-          <li>&nbsp;&nbsp;🇮🇳 "Asamiyat kowa"</li>
+          <li>🔉 "Read slower" / "Louder"</li>
+          <li>🌍 "Change to Hindi/Kannada…"</li>
           <li>🚪 "Logout"</li>
         </ul>
       </div>

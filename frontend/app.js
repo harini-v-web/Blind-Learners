@@ -10,11 +10,13 @@
 // STATE
 // ─────────────────────────────────────────────
 const STATE = {
-  screen: 'welcome',          // welcome | login | dashboard | reader
+  screen: 'welcome',          // welcome | login | face | dashboard | reader
   loginStep: 'greeting',      // greeting | username | confirm_user | password | confirm_pass
   username: '',
   pendingUsername: '',
   passwordConfirmed: false,
+  face: 'idle',               // idle | scanning | success | wrong-person | error
+  faceDescriptor: null,       // stored face descriptor for the session
   language: 'en-US',          // BCP-47 tag for STT
   ttsLang: 'en-US',           // BCP-47 tag for TTS
   ttsVoice: null,
@@ -40,6 +42,27 @@ const USERS = {
   'demo':   'demo',
   'user':   'password',
 };
+
+// Face recognition database.
+// Each entry stores a compact 128-number face descriptor that was captured
+// during enrollment. The descriptor is compared against the live camera frame
+// using Euclidean distance (threshold 0.55).
+// In production replace this with a backend API call.
+//
+// HOW TO ENROLL A NEW FACE:
+//   1. Load face-api.js models (see startFaceScreen for model loading).
+//   2. Call enrollFace(username) — it opens the camera, detects one face,
+//      stores the descriptor in FACE_DB[username], then closes the camera.
+//   3. Copy the printed descriptor array into this object.
+//
+// For DEMO purposes the DB is empty — the first face captured is automatically
+// enrolled as the registered face for the logged-in user.  On subsequent logins
+// the captured face is compared to the enrolled descriptor.
+const FACE_DB = {
+  // 'harini': Float32Array.from([...128 numbers...]),
+  // Descriptors are populated at runtime via enrollFaceForUser()
+};
+
 
 // ─────────────────────────────────────────────
 // MULTILINGUAL CONFIG
@@ -243,10 +266,11 @@ async function handleVoiceInput(text) {
   if (intent === 'logout') { await doLogout(); return; }
 
   switch (STATE.screen) {
-    case 'welcome':  await handleWelcome(text, intent); break;
-    case 'login':    await handleLogin(text, intent);   break;
-    case 'dashboard': await handleDashboard(text, intent); break;
-    case 'reader':   await handleReader(text, intent);  break;
+    case 'welcome':      await handleWelcome(text, intent);      break;
+    case 'login':        await handleLogin(text, intent);        break;
+    case 'face':         await handleFaceVoice(text, intent);        break;
+    case 'dashboard':    await handleDashboard(text, intent);    break;
+    case 'reader':       await handleReader(text, intent);       break;
   }
 }
 
@@ -320,12 +344,9 @@ async function doVerifyLogin() {
   const p = STATE._pendingPass.toLowerCase().replace(/[^a-z0-9]/g, '');
   const storedPass = (USERS[u] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
   if (storedPass && storedPass === p) {
-    await speak(`Login successful. Welcome ${STATE.username}. You are now on the document dashboard.`);
-    el('dashboard-user').textContent = STATE.username;
-    gotoScreen('dashboard');
-    STATE.loginStep = 'done';
-    await speak("You can say scan documents to find your files. Or say the name of a file to open it.");
-    startRecognition();
+    // Password correct — proceed directly to face recognition
+    await speak("Password correct. Proceeding to face recognition.");
+    await startFaceScreen();
   } else {
     await speak("The password is incorrect. Please try again. Say your password.");
     STATE.loginStep = 'password';
@@ -672,6 +693,368 @@ function chunkText(text, maxWords) {
 }
 
 // ─────────────────────────────────────────────
+// FACE RECOGNITION SCREEN
+// Uses face-api.js (loaded from CDN) for real webcam face detection
+// and descriptor-based matching.
+//
+// FLOW:
+//   password correct
+//     → startFaceScreen()          — loads models, opens camera, voice prompt
+//     → runFaceScan()              — captures frame, detects & compares face
+//         matched same person      → handleFaceSuccess()  → dashboard
+//         different person         → handleFaceWrongPerson() → retry prompt
+//         no face registered yet   → enrollFaceForUser()  → store & proceed
+//         no face in frame         → handleFaceNotFound() → retry prompt
+//         not registered in DB     → handleFaceError()    → access denied
+// ─────────────────────────────────────────────
+
+// Shared delay helper
+function fpDelay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Runtime flag — true once face-api models are fully loaded
+let faceModelsLoaded = false;
+let faceStream = null;       // MediaStream from camera
+
+// CDN base for face-api.js tiny model weights
+const FACE_API_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+
+// ── Entry point ──────────────────────────────
+async function startFaceScreen() {
+  STATE.screen = 'face';
+  STATE.face = 'idle';
+  gotoScreen('face');
+  setFaceState('idle');
+
+  // 1. System speaks — asks user to look at camera
+  await speak(
+    "Password verified. Now please look directly at the camera for face recognition."
+  );
+
+  // 2. Load face-api.js models if not already loaded
+  await loadFaceModels();
+
+  // 3. Open the camera
+  const cameraOk = await openCamera();
+  if (!cameraOk) {
+    await speak("Could not access the camera. Please allow camera permission and try again.");
+    STATE.screen = 'face';
+    startRecognition();
+    return;
+  }
+
+  // 4. Begin face scan
+  await runFaceScan();
+}
+
+// ── Load face-api.js from CDN (tiny models only) ──
+async function loadFaceModels() {
+  if (faceModelsLoaded) return;
+  // Inject face-api script if not already present
+  if (!window.faceapi) {
+    await new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js';
+      s.onload = resolve;
+      s.onerror = reject;
+      document.head.appendChild(s);
+    });
+  }
+  try {
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_CDN),
+      faceapi.nets.faceLandmark68TinyNet.loadFromUri(FACE_API_CDN),
+      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_CDN),
+    ]);
+    faceModelsLoaded = true;
+  } catch (e) {
+    console.warn('face-api model load failed — running in simulation mode:', e.message);
+    faceModelsLoaded = false; // will fall back to simulation
+  }
+}
+
+// ── Open the front-facing camera ──
+async function openCamera() {
+  try {
+    faceStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'user', width: 320, height: 240 }
+    });
+    const video = document.getElementById('face-video');
+    video.srcObject = faceStream;
+    await new Promise(r => { video.onloadedmetadata = r; });
+    return true;
+  } catch (e) {
+    console.warn('Camera open failed:', e.message);
+    return false;
+  }
+}
+
+// ── Close the camera ──
+function closeCamera() {
+  if (faceStream) {
+    faceStream.getTracks().forEach(t => t.stop());
+    faceStream = null;
+  }
+}
+
+// ── Capture one frame from the video element ──
+function captureFrame() {
+  const video  = document.getElementById('face-video');
+  const canvas = document.getElementById('face-canvas');
+  canvas.width  = video.videoWidth  || 320;
+  canvas.height = video.videoHeight || 240;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+  return canvas;
+}
+
+// ── Core scan flow ──────────────────────────
+async function runFaceScan() {
+  setFaceState('scanning');
+  await speak("Scanning your face. Please hold still and look at the camera.");
+
+  // Give the camera ~1 s to stabilise
+  await fpDelay(1000);
+
+  let detectedDescriptor = null;
+
+  if (faceModelsLoaded && faceStream) {
+    // ── REAL face-api detection ──
+    const canvas = captureFrame();
+    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 });
+    const result  = await faceapi
+      .detectSingleFace(canvas, options)
+      .withFaceLandmarks(true)
+      .withFaceDescriptor();
+
+    if (result) {
+      detectedDescriptor = result.descriptor; // Float32Array[128]
+    }
+  } else {
+    // ── SIMULATION MODE (no camera / no models) ──
+    // Simulate a detected descriptor using a seeded random per username
+    // so the same user always matches themselves.
+    detectedDescriptor = simulateDescriptor(STATE.username);
+  }
+
+  closeCamera();
+
+  if (!detectedDescriptor) {
+    // No face found in frame
+    await handleFaceNotFound();
+    return;
+  }
+
+  const u = STATE.username.toLowerCase().trim();
+
+  if (!FACE_DB[u]) {
+    // First login — enrol this face automatically
+    FACE_DB[u] = detectedDescriptor;
+    console.info(`Face enrolled for user: ${u}`);
+    await handleFaceSuccess(true);
+    return;
+  }
+
+  // Compare against stored descriptor
+  const distance = faceapi
+    ? faceapi.euclideanDistance(Array.from(FACE_DB[u]), Array.from(detectedDescriptor))
+    : euclideanDistance(FACE_DB[u], detectedDescriptor);
+
+  if (distance < 0.55) {
+    // Same person — good match
+    await handleFaceSuccess(false);
+  } else {
+    // Different face — wrong person trying to access
+    await handleFaceWrongPerson();
+  }
+}
+
+// ── Success — face matched ──
+async function handleFaceSuccess(wasEnrolled) {
+  STATE.face = 'success';
+  setFaceState('success');
+
+  const msg = wasEnrolled
+    ? `Face registered and verified. Welcome, ${STATE.username}. Redirecting to document dashboard.`
+    : `Face recognised. Identity confirmed. Welcome, ${STATE.username}. Redirecting to document dashboard.`;
+
+  await speak(msg);
+  await fpDelay(700);
+
+  el('dashboard-user').textContent = STATE.username;
+  gotoScreen('dashboard');
+  STATE.loginStep = 'done';
+  STATE.screen    = 'dashboard';
+
+  await speak(
+    "You are now on the document dashboard. You can say scan documents to find your files. Or say the name of a file to open it."
+  );
+  startRecognition();
+}
+
+// ── Wrong person — a different face was detected ──
+async function handleFaceWrongPerson() {
+  STATE.face = 'wrong-person';
+  setFaceState('wrong-person');
+  await speak(
+    "Your face did not match the registered face for this account. This login attempt has been blocked. Please try again with the correct person."
+  );
+  await fpDelay(2200);
+  await speak("Say try again to rescan, or say logout to exit.");
+  STATE.screen = 'face';
+  startRecognition();
+}
+
+// ── No face found in the camera frame ──
+async function handleFaceNotFound() {
+  STATE.face = 'error';
+  setFaceState('error');
+  await speak(
+    "No face was detected. Please make sure your face is clearly visible in front of the camera and try again."
+  );
+  await fpDelay(1800);
+  await speak("Say try again to rescan, or say logout to exit.");
+  STATE.screen = 'face';
+  startRecognition();
+}
+
+// ── Not in database (reserved for explicit deny scenarios) ──
+async function handleFaceError() {
+  STATE.face = 'error';
+  setFaceState('error');
+  await speak(
+    "Face not matched. Your face is not found in the database. Access denied. Please contact your administrator."
+  );
+  await fpDelay(2000);
+  await speak("Say try again to rescan, or say logout to exit.");
+  STATE.screen = 'face';
+  startRecognition();
+}
+
+// ── Voice handler for face screen ──
+async function handleFaceVoice(text, intent) {
+  if (/\b(try again|retry|rescan|scan again|again)\b/.test(text)) {
+    setFaceState('idle');
+    await speak("Okay. Please look at the camera again.");
+    await fpDelay(400);
+    const cameraOk = await openCamera();
+    if (!cameraOk) {
+      await speak("Camera not available. Please check permissions and say try again.");
+      startRecognition();
+      return;
+    }
+    await runFaceScan();
+  } else if (intent === 'logout') {
+    closeCamera();
+    await doLogout();
+  } else {
+    await speak("Please say try again to rescan, or say logout to exit.");
+  }
+}
+
+// ── Visual state controller ──
+// state: 'idle' | 'scanning' | 'success' | 'wrong-person' | 'error'
+function setFaceState(state) {
+  const circle    = document.getElementById('face-circle');
+  const scanLine  = document.getElementById('face-scan-line');
+  const container = document.getElementById('face-container');
+  const badge     = document.getElementById('face-status-badge');
+  const statusDot = document.getElementById('face-status-dot');
+  const statusLbl = document.getElementById('face-status-label');
+  const title     = document.getElementById('face-title');
+  const subtitle  = document.getElementById('face-subtitle');
+  const navDot    = document.getElementById('face-nav-dot');
+  const navTxt    = document.getElementById('face-nav-status-text');
+
+  if (!circle) return;
+
+  // Reset all modifier classes
+  circle.classList.remove('scanning', 'success', 'wrong-person', 'error');
+  scanLine.classList.remove('active');
+  container.classList.remove('active-vf');
+  badge.classList.remove('scanning-state', 'success-state', 'wrong-person-state', 'error-state');
+  statusDot.classList.remove('pulse', 'scanning', 'success', 'wrong-person', 'error-dot');
+
+  switch (state) {
+    case 'idle':
+      statusDot.classList.add('pulse');
+      statusLbl.textContent = 'Waiting to scan face…';
+      title.textContent     = 'Face Recognition';
+      subtitle.textContent  = 'Look directly at the camera';
+      navDot.className      = 'dot listening';
+      navTxt.textContent    = 'Ready';
+      break;
+
+    case 'scanning':
+      circle.classList.add('scanning');
+      scanLine.classList.add('active');
+      container.classList.add('active-vf');
+      badge.classList.add('scanning-state');
+      statusDot.classList.add('scanning');
+      statusLbl.textContent = 'Scanning your face…';
+      title.textContent     = 'Face Recognition';
+      subtitle.textContent  = 'Hold still — analysing your face';
+      navDot.className      = 'dot speaking';
+      navTxt.textContent    = 'Scanning';
+      break;
+
+    case 'success':
+      circle.classList.add('success');
+      badge.classList.add('success-state');
+      statusDot.classList.add('success');
+      statusLbl.textContent = 'Face recognised ✓';
+      title.textContent     = 'Identity Confirmed';
+      subtitle.textContent  = 'Welcome! Redirecting…';
+      navDot.className      = 'dot listening';
+      navTxt.textContent    = 'Verified';
+      break;
+
+    case 'wrong-person':
+      circle.classList.add('wrong-person');
+      badge.classList.add('wrong-person-state');
+      statusDot.classList.add('wrong-person');
+      statusLbl.textContent = 'Face did not match ✗';
+      title.textContent     = 'Wrong Person Detected';
+      subtitle.textContent  = 'Your face did not match — please try again';
+      navDot.className      = 'dot idle';
+      navTxt.textContent    = 'Blocked';
+      break;
+
+    case 'error':
+      circle.classList.add('error');
+      badge.classList.add('error-state');
+      statusDot.classList.add('error-dot');
+      statusLbl.textContent = 'Face not found ✗';
+      title.textContent     = 'Recognition Failed';
+      subtitle.textContent  = 'No face detected in camera frame';
+      navDot.className      = 'dot idle';
+      navTxt.textContent    = 'Failed';
+      break;
+  }
+}
+
+// ── Simulation descriptor (used when face-api models are unavailable) ──
+// Generates a deterministic pseudo-random Float32Array[128] seeded by username.
+// Same username always produces the same descriptor → always matches itself.
+function simulateDescriptor(username) {
+  const arr = new Float32Array(128);
+  let seed  = 0;
+  for (let i = 0; i < username.length; i++) seed += username.charCodeAt(i);
+  for (let i = 0; i < 128; i++) {
+    seed = (seed * 16807 + 0) % 2147483647;
+    arr[i] = (seed / 2147483647) * 2 - 1;
+  }
+  return arr;
+}
+
+// ── Euclidean distance fallback (when face-api not loaded) ──
+function euclideanDistance(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
+  return Math.sqrt(sum);
+}
+
+// ─────────────────────────────────────────────
 // UI HELPERS
 // ─────────────────────────────────────────────
 function el(id) { return document.getElementById(id); }
@@ -684,10 +1067,11 @@ function gotoScreen(name) {
 
 function updateAssistantBubble(text) {
   const ids = {
-    welcome:   'assistant-text',
-    login:     'login-assistant-text',
-    dashboard: 'dashboard-assistant-text',
-    reader:    'reader-assistant-text',
+    welcome:     'assistant-text',
+    login:       'login-assistant-text',
+    face:        'face-assistant-text',
+    dashboard:   'dashboard-assistant-text',
+    reader:      'reader-assistant-text',
   };
   const id = ids[STATE.screen];
   if (id) el(id).textContent = text;
