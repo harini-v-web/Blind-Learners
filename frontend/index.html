@@ -21,7 +21,7 @@
 
   <div class="hero">
     <h1 class="hero-title">Welcome to<br><span class="accent">VOICE4BLIND</span></h1>
-    <p class="hero-sub">A fully voice-controlled document reader powered by AI. No clicking, no typing — just speak naturally.</p>
+    <p class="hero-sub">A fully voice-controlled document reader powered by AI.<br>No clicking, no typing — just speak naturally.</p>
 
     <div class="mic-container" id="mic-welcome">
       <div class="mic-ring outer"></div>
@@ -45,6 +45,10 @@
     <div class="assistant-bubble" id="assistant-bubble">
       <div class="bubble-icon">🔊</div>
       <p id="assistant-text">Initializing voice assistant…</p>
+    </div>
+
+    <div class="welcome-commands">
+      <p>Say <strong>"Hi"</strong> to start voice login &nbsp;|&nbsp; Say <strong>"Face Login"</strong> to use face recognition</p>
     </div>
   </div>
 </div>
@@ -97,82 +101,7 @@
   </div>
 </div>
 
-<!-- ===== SCREEN: FACE RECOGNITION ===== -->
-<div id="screen-face" class="screen">
-  <nav class="navbar">
-    <div class="logo">VOICE4<span>BLIND</span></div>
-    <div class="tagline-nav">EMPOWERING VISION THROUGH VOICE</div>
-    <div class="status-dot" id="face-nav-status">
-      <span class="dot listening" id="face-nav-dot"></span>
-      <span id="face-nav-status-text">Scanning</span>
-    </div>
-  </nav>
-
-  <div class="login-container">
-    <div class="login-card face-card">
-
-      <!-- Face icon with camera viewfinder + animated rings -->
-      <div class="face-container" id="face-container">
-        <div class="face-ring outer"  id="face-ring-outer"></div>
-        <div class="face-ring middle" id="face-ring-middle"></div>
-        <div class="face-circle" id="face-circle">
-          <!-- Face / camera SVG icon -->
-          <svg class="face-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <!-- Head outline -->
-            <ellipse cx="32" cy="27" rx="16" ry="18" stroke="white" stroke-width="2.8" stroke-linecap="round"/>
-            <!-- Left eye -->
-            <circle cx="25" cy="23" r="2.5" fill="white"/>
-            <!-- Right eye -->
-            <circle cx="39" cy="23" r="2.5" fill="white"/>
-            <!-- Nose -->
-            <path d="M32 26 L30 31 Q32 33 34 31 Z" fill="white" opacity="0.7"/>
-            <!-- Smile -->
-            <path d="M25 34 Q32 40 39 34" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none"/>
-            <!-- Shoulders / body base hint -->
-            <path d="M12 58 Q16 48 32 46 Q48 48 52 58" stroke="white" stroke-width="2.4" stroke-linecap="round" fill="none"/>
-            <!-- Viewfinder corners (top-left) -->
-            <path d="M6 14 L6 6 L14 6" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
-            <!-- Viewfinder corners (top-right) -->
-            <path d="M58 14 L58 6 L50 6" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
-            <!-- Viewfinder corners (bottom-left) -->
-            <path d="M6 50 L6 58 L14 58" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
-            <!-- Viewfinder corners (bottom-right) -->
-            <path d="M58 50 L58 58 L50 58" stroke="white" stroke-width="2.2" stroke-linecap="round" fill="none" opacity="0.6"/>
-          </svg>
-        </div>
-        <!-- Horizontal scan line that sweeps the face -->
-        <div class="face-scan-line" id="face-scan-line"></div>
-        <!-- Corner viewfinder brackets overlaid on the container -->
-        <div class="vf-corner vf-tl"></div>
-        <div class="vf-corner vf-tr"></div>
-        <div class="vf-corner vf-bl"></div>
-        <div class="vf-corner vf-br"></div>
-      </div>
-
-      <h2 class="face-title" id="face-title">Face Recognition</h2>
-      <p class="face-subtitle" id="face-subtitle">Look directly at the camera</p>
-
-      <!-- Status badge -->
-      <div class="face-status-badge" id="face-status-badge">
-        <span class="face-status-dot pulse" id="face-status-dot"></span>
-        <span id="face-status-label">Waiting to scan face…</span>
-      </div>
-
-      <!-- Live camera feed (hidden behind icon when idle, shown during scan) -->
-      <video id="face-video" class="face-video" autoplay muted playsinline></video>
-      <canvas id="face-canvas" class="face-canvas"></canvas>
-
-      <!-- Voice assistant bubble -->
-      <div class="assistant-bubble face-bubble" id="face-bubble">
-        <div class="bubble-icon">🔊</div>
-        <p id="face-assistant-text">Initializing face recognition…</p>
-      </div>
-
-    </div>
-  </div>
-</div>
-
-<!-- ===== SCREEN: DASHBOARD / FILE SELECTION ===== -->
+<!-- ===== SCREEN: DASHBOARD ===== -->
 <div id="screen-dashboard" class="screen">
   <nav class="navbar">
     <div class="logo">VOICE4<span>BLIND</span></div>
@@ -189,15 +118,13 @@
   <div class="dashboard-layout">
     <div class="dashboard-left">
       <h2 class="section-title">Document Dashboard</h2>
-      <p class="section-sub">Say a file name to open it. I will guide you.</p>
+      <p class="section-sub">Say a file name or number to open it.</p>
 
-      <div class="file-list" id="file-list">
-        <!-- Files populated dynamically -->
-      </div>
+      <div class="file-list" id="file-list"></div>
 
       <div class="upload-hint">
         <span>📂</span>
-        <p>Say "upload file" or "scan documents" to find files</p>
+        <p>Say "scan documents" to find files, or "upload file" to add new ones</p>
       </div>
     </div>
 
@@ -223,8 +150,9 @@
         <h3>Voice Commands</h3>
         <ul>
           <li>📂 "Scan documents"</li>
-          <li>📄 "Open [filename]"</li>
-          <li>🔄 "List files again"</li>
+          <li>📄 "Open [filename]" / "1", "2", "3"…</li>
+          <li>🤳 "Enroll face" — save your face for login</li>
+          <li>🌍 "Switch to Kannada / Hindi / Tamil…"</li>
           <li>🚪 "Logout"</li>
         </ul>
       </div>
@@ -250,7 +178,7 @@
     <div class="reader-left">
       <div class="reader-info-bar">
         <span id="reader-lang-badge" class="lang-badge">EN</span>
-        <span id="reader-page-info" class="page-info">Page 1</span>
+        <span id="reader-page-info" class="page-info">Section 1</span>
         <span id="reader-speed-badge" class="speed-badge">Normal Speed</span>
       </div>
 
@@ -286,17 +214,25 @@
       <div class="commands-hint reader-commands">
         <h3>Voice Commands</h3>
         <ul>
-          <li>▶️ "Start reading" / "Read"</li>
-          <li>⏸️ "Pause" / "Wait" / "Stop"</li>
+          <li>▶️ "Read" / "Start reading"</li>
+          <li>⏸️ "Pause" / "Stop"</li>
+          <li>▶️ "Resume" / "Continue"</li>
           <li>🔁 "Repeat" / "Say again"</li>
-          <li>⏩ "Next chapter" / "Skip"</li>
+          <li>⏩ "Next" / "Skip"</li>
+          <li>⏮️ "Previous" / "Back"</li>
           <li>📝 "Summarize"</li>
-          <li>💡 "Explain simply"</li>
+          <li>💡 "Explain" / "Simple words"</li>
           <li>📌 "Important points"</li>
-          <li>🔉 "Read slower" / "Louder"</li>
-          <li>🌍 "Change to Hindi/Kannada…"</li>
+          <li>🐢 "Read slower" / "Faster"</li>
+          <li>🔊 "Louder" / "Quieter"</li>
+          <li>🖼️ "Describe" (for images)</li>
+          <li>❓ Ask any question — e.g. "How does this work?"</li>
+          <li>🌍 Language — "Switch to Kannada" etc.</li>
           <li>🚪 "Logout"</li>
         </ul>
+        <div class="interrupt-note">
+          ⚡ All commands work WHILE reading is happening
+        </div>
       </div>
     </div>
   </div>

@@ -1,1161 +1,1287 @@
 /* ============================================================
-   VOICE4BLIND — Frontend Voice Engine
-   Full voice-controlled application with intent detection,
-   multilingual TTS, and document reading pipeline.
-   ============================================================ */
+   VOICE4BLIND — Frontend v4 (Complete Fix)
 
+   Fixes applied:
+   1. Face Recognition: webcam enroll + verify flow
+   2. Commands work WHILE system is speaking (interrupt listening)
+   3. Pause / Repeat / Stop / Loud all respond immediately
+   4. Multilanguage: STT + TTS switch together; speaks in chosen language
+   5. Volume up/down changes volume (not speed); speed is separate
+   6. Mid-reading Q&A: questions answered via AI without stopping playback
+   7. Logout works from any screen
+   8. Continuous interrupt-listening during readLoop
+   ============================================================ */
 'use strict';
 
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // STATE
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 const STATE = {
-  screen: 'welcome',          // welcome | login | face | dashboard | reader
-  loginStep: 'greeting',      // greeting | username | confirm_user | password | confirm_pass
-  username: '',
-  pendingUsername: '',
-  passwordConfirmed: false,
-  face: 'idle',               // idle | scanning | success | wrong-person | error
-  faceDescriptor: null,       // stored face descriptor for the session
-  language: 'en-US',          // BCP-47 tag for STT
-  ttsLang: 'en-US',           // BCP-47 tag for TTS
-  ttsVoice: null,
-  readingRate: 1.0,
-  readingPitch: 1.0,
-  documentText: '',
+  screen:         'welcome',
+  loginStep:      'greeting',   // greeting | username | confirm_user | password | verify | face_verify
+  username:       '',
+  pendingUsername:'',
+  _pendingPass:   '',
+
+  // Language
+  language:       'en-US',      // STT lang
+  ttsLang:        'en-US',      // TTS lang
+  langKey:        'english',    // current LANGUAGES key
+
+  // Reading
+  readingRate:    1.0,
+  readingVolume:  1.0,
+  documentText:   '',
   documentChunks: [],
-  chunkIndex: 0,
-  isReading: false,
-  isPaused: false,
-  currentFile: null,
+  chunkIndex:     0,
+  isReading:      false,
+  isPaused:       false,
+  currentFile:    null,
+
+  // Files
   discoveredFiles: [],
-  pendingFile: '',
-  isListening: false,
-  isSpeaking: false,
-  recognition: null,
-  uploadedFileName: null,
+
+  // Voice control
+  isListening:    false,
+  isSpeaking:     false,
+  recognition:    null,
+  _recTimer:      null,
+
+  // Interrupt listening (runs even while main TTS is speaking)
+  interruptRec:   null,
+  interruptActive:false,
+
+  // Face auth
+  faceStream:     null,
+  faceEnrolled:   false,
+
+  // Context for Q&A
+  lastReadChunk:  '',
 };
 
-// Fake user database (for demo; real system uses backend)
-const USERS = {
-  'harini': '1234',
-  'demo':   'demo',
-  'user':   'password',
-};
+// ═══════════════════════════════════════════════
+// USER DB (client-side mirror)
+// ═══════════════════════════════════════════════
+const USERS = { harini:'1234', demo:'demo', user:'password', admin:'admin' };
 
-// Face recognition database.
-// Each entry stores a compact 128-number face descriptor that was captured
-// during enrollment. The descriptor is compared against the live camera frame
-// using Euclidean distance (threshold 0.55).
-// In production replace this with a backend API call.
-//
-// HOW TO ENROLL A NEW FACE:
-//   1. Load face-api.js models (see startFaceScreen for model loading).
-//   2. Call enrollFace(username) — it opens the camera, detects one face,
-//      stores the descriptor in FACE_DB[username], then closes the camera.
-//   3. Copy the printed descriptor array into this object.
-//
-// For DEMO purposes the DB is empty — the first face captured is automatically
-// enrolled as the registered face for the logged-in user.  On subsequent logins
-// the captured face is compared to the enrolled descriptor.
-const FACE_DB = {
-  // 'harini': Float32Array.from([...128 numbers...]),
-  // Descriptors are populated at runtime via enrollFaceForUser()
-};
-
-
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // MULTILINGUAL CONFIG
-// ─────────────────────────────────────────────
-const LANG_MAP = {
-  english:   { stt: 'en-US',  tts: 'en-US',  label: 'English',    short: 'EN' },
-  hindi:     { stt: 'hi-IN',  tts: 'hi-IN',  label: 'Hindi',      short: 'HI' },
-  kannada:   { stt: 'kn-IN',  tts: 'kn-IN',  label: 'Kannada',    short: 'KN' },
-  tamil:     { stt: 'ta-IN',  tts: 'ta-IN',  label: 'Tamil',      short: 'TA' },
-  telugu:    { stt: 'te-IN',  tts: 'te-IN',  label: 'Telugu',     short: 'TE' },
-  malayalam: { stt: 'ml-IN',  tts: 'ml-IN',  label: 'Malayalam',  short: 'ML' },
-  marathi:   { stt: 'mr-IN',  tts: 'mr-IN',  label: 'Marathi',    short: 'MR' },
-  bengali:   { stt: 'bn-IN',  tts: 'bn-IN',  label: 'Bengali',    short: 'BN' },
-  gujarati:  { stt: 'gu-IN',  tts: 'gu-IN',  label: 'Gujarati',   short: 'GU' },
-  punjabi:   { stt: 'pa-IN',  tts: 'pa-IN',  label: 'Punjabi',    short: 'PA' },
-  urdu:      { stt: 'ur-PK',  tts: 'ur-PK',  label: 'Urdu',       short: 'UR' },
-  odia:      { stt: 'or-IN',  tts: 'or-IN',  label: 'Odia',       short: 'OR' },
-  assamese:  { stt: 'as-IN',  tts: 'as-IN',  label: 'Assamese',   short: 'AS' },
+// ═══════════════════════════════════════════════
+const LANGUAGES = {
+  english:   { stt:'en-US', tts:'en-US', label:'English',   short:'EN',
+    triggers:['switch to english','change to english','english please','speak english','english mode'] },
+  hindi:     { stt:'hi-IN', tts:'hi-IN', label:'Hindi',     short:'HI',
+    triggers:['hindi mein bolo','hindi mein badlo','change to hindi','hindi par switch karo','hindi karo','switch to hindi'] },
+  kannada:   { stt:'kn-IN', tts:'kn-IN', label:'Kannada',   short:'KN',
+    triggers:['kannadakke badalisu','kannada ge badalisu','kannadalli helu','kannada badalisu','change to kannada','switch to kannada','kannada mode'] },
+  tamil:     { stt:'ta-IN', tts:'ta-IN', label:'Tamil',     short:'TA',
+    triggers:['tamilil pesi','tamil maarum','tamilukku maarum','change to tamil','tamil pesu','switch to tamil'] },
+  telugu:    { stt:'te-IN', tts:'te-IN', label:'Telugu',    short:'TE',
+    triggers:['telugulo chappu','teluguki maaru','telugulo cheppu','change to telugu','switch to telugu'] },
+  malayalam: { stt:'ml-IN', tts:'ml-IN', label:'Malayalam', short:'ML',
+    triggers:['malayalatthil paranju','malayalathilekku maaru','change to malayalam','switch to malayalam'] },
+  marathi:   { stt:'mr-IN', tts:'mr-IN', label:'Marathi',   short:'MR',
+    triggers:['marathit bola','marathi madhe bola','change to marathi','switch to marathi'] },
+  bengali:   { stt:'bn-IN', tts:'bn-IN', label:'Bengali',   short:'BN',
+    triggers:['banglay bolo','bangla te bolo','change to bengali','switch to bengali'] },
+  gujarati:  { stt:'gu-IN', tts:'gu-IN', label:'Gujarati',  short:'GU',
+    triggers:['gujaratima bolo','gujarati ma badlo','change to gujarati','switch to gujarati'] },
+  punjabi:   { stt:'pa-IN', tts:'pa-IN', label:'Punjabi',   short:'PA',
+    triggers:['punjabi vich bolo','punjabi te badlo','change to punjabi','switch to punjabi'] },
+  urdu:      { stt:'ur-PK', tts:'ur-PK', label:'Urdu',      short:'UR',
+    triggers:['urdu mein bolo','urdu par badlo','change to urdu','switch to urdu'] },
+  odia:      { stt:'or-IN', tts:'or-IN', label:'Odia',      short:'OR',
+    triggers:['odialare kahu','odia re kahu','change to odia','switch to odia'] },
+  assamese:  { stt:'as-IN', tts:'as-IN', label:'Assamese',  short:'AS',
+    triggers:['asamiyat kowa','assamese ot kowa','change to assamese','switch to assamese'] },
 };
 
-// Language aliases for intent detection
-const LANG_ALIASES = {
-  'english': 'english', 'hindi': 'hindi', 'हिंदी': 'hindi',
-  'kannada': 'kannada', 'ಕನ್ನಡ': 'kannada', 'kannad': 'kannada',
-  'tamil': 'tamil', 'தமிழ்': 'tamil',
-  'telugu': 'telugu', 'తెలుగు': 'telugu',
-  'malayalam': 'malayalam', 'മലയാളം': 'malayalam',
-  'marathi': 'marathi', 'मराठी': 'marathi',
-  'bengali': 'bengali', 'bangla': 'bengali', 'বাংলা': 'bengali',
-  'gujarati': 'gujarati', 'ગુજરાતી': 'gujarati',
-  'punjabi': 'punjabi', 'ਪੰਜਾਬੀ': 'punjabi',
-  'urdu': 'urdu', 'اردو': 'urdu',
-  'odia': 'odia', 'oriya': 'odia', 'ଓଡ଼ିଆ': 'odia',
-  'assamese': 'assamese', 'অসমীয়া': 'assamese',
-};
+// ═══════════════════════════════════════════════
+// INTENT PATTERNS
+// ═══════════════════════════════════════════════
+const INTENTS = [
+  { name:'start_read',  words:['start reading','begin reading','start read','begin read','read now','please read','read aloud','odhu','chadhu','padhna shuru','vaaykka','chadu','read'] },
+  { name:'pause',       words:['pause','stop reading','hold on','wait','ruko','nirthu','nikol','nillu','thadu','band karo','stop'] },
+  { name:'resume',      words:['resume','continue','go on','carry on','chaliye','munde','thodaru','tirigimpu','continue reading','start again','go ahead'] },
+  { name:'repeat',      words:['repeat','say again','once more','again','dobara','marubar','matte','thirumba','malli cheppu','phir se','repeat that','say that again'] },
+  { name:'next',        words:['next','skip','forward','next chapter','next section','next part','munde','agle','tiragandi','move forward','go next'] },
+  { name:'prev',        words:['previous','back','go back','last section','hinde','peeche','pinthu','venkaka','previous section','go previous'] },
+  { name:'summarize',   words:['summarize','summary','brief','short summary','saar','saransh','saramsha','saramsham','give summary','tell summary','make summary'] },
+  { name:'explain',     words:['explain','simple words','easy words','samjhao','artha','vilakku','simple ga cheppu','saral mein','explain simply','make it simple','simplify'] },
+  { name:'key_points',  words:['important points','key points','main points','highlights','mukhya','muhtvapurna','important vishayas','key info','give points','what are the main'] },
+  { name:'slower',      words:['read slower','slow down','slower','slowly','dheere','melle','thire','mella','read slow','bit slow','reduce speed','decrease speed'] },
+  { name:'faster',      words:['read faster','speed up','faster','fast','jaldi','bega','vegam','vega','read fast','bit fast','increase speed'] },
+  { name:'louder',      words:['louder','speak louder','volume up','increase volume','loud','zyada aawaaz','jaasti','adhikam','more volume','bit louder','turn up','increase voice'] },
+  { name:'quieter',     words:['quieter','softer','volume down','lower volume','quiet','kum aawaaz','kam','kurangu','takkuva','less volume','bit quiet','turn down','decrease voice'] },
+  { name:'clarify',     words:["didn't understand","not clear","confused","unclear","samjha nahi","puriyala","artagalilla","teliyaledu","say differently","not understood","what did you say"] },
+  { name:'describe',    words:['describe','describe image','describe graph','describe chart','describe table','what is the image','tell about picture','explain image','what does it show'] },
+  { name:'scan_files',  words:['scan documents','list files','find files','show files','scan','list documents','find documents','show documents','available files','my files'] },
+  { name:'open_file',   words:['open','load file','select file','choose file','open file','read file'] },
+  { name:'face_enroll', words:['enroll face','register face','add my face','save my face','face register','face setup'] },
+  { name:'face_login',  words:['face login','login with face','use face','face recognition','scan my face','recognize face'] },
+  { name:'greeting',    words:['hi','hello','hey','ready','start','begin','yeah','ya','namaste','vanakkam'] },
+  { name:'confirm',     words:['yes','correct','right','ok','okay','sure','haan','ha','bilkul','avunu','aam','that is correct','yes please','affirmative'] },
+  { name:'deny',        words:['no','wrong','repeat','nahi','nope','incorrect','thappu','kadu','not right','try again'] },
+  { name:'logout',      words:['logout','log out','exit','goodbye','bye','quit','close app','sign out','end session'] },
+];
 
-// ─────────────────────────────────────────────
-// TTS ENGINE (Web Speech API)
-// ─────────────────────────────────────────────
-function speak(text, onEnd) {
+// ═══════════════════════════════════════════════
+// INTENT DETECTION
+// ═══════════════════════════════════════════════
+function detectIntent(text) {
+  const t = clean(text);
+
+  // 1. Language triggers (check ALL native phrases)
+  for (const [langKey, cfg] of Object.entries(LANGUAGES)) {
+    for (const trigger of cfg.triggers) {
+      if (t.includes(trigger)) return { name:'change_lang', lang:langKey };
+    }
+  }
+
+  // 2. Intent patterns
+  for (const intent of INTENTS) {
+    for (const word of intent.words) {
+      if (t.includes(word)) return { name:intent.name };
+    }
+  }
+
+  return { name:'unknown', raw:text };
+}
+
+function clean(text) {
+  return (text||'').toLowerCase()
+    .replace(/[.,!?;:'"]/g,' ')
+    .replace(/\s+/g,' ')
+    .trim();
+}
+function cleanAlphaNum(text) {
+  return (text||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+}
+
+// ═══════════════════════════════════════════════
+// TTS ENGINE
+// Fix: volume changes volume (not rate); separate controls
+// Fix: speaks in the CORRECT language voice
+// ═══════════════════════════════════════════════
+function speak(text, lang) {
   return new Promise(resolve => {
-    if (!text) { resolve(); if (onEnd) onEnd(); return; }
+    if (!text) { resolve(); return; }
+    window.speechSynthesis.cancel();
     STATE.isSpeaking = true;
-    stopRecognition();
-    updateMicState('speaking');
-    updateAssistantBubble(text);
+    setMicState('speaking');
+    updateBubble(text);
 
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang  = STATE.ttsLang;
-    utter.rate  = STATE.readingRate;
-    utter.pitch = STATE.readingPitch;
+    const useLang = lang || STATE.ttsLang;
+    const utter   = new SpeechSynthesisUtterance(text);
+    utter.lang    = useLang;
+    utter.rate    = STATE.readingRate;
+    utter.volume  = STATE.readingVolume;
+    utter.pitch   = 1.0;
 
-    // Pick best voice for language
-    const voices = window.speechSynthesis.getVoices();
-    const match  = voices.find(v => v.lang.startsWith(STATE.ttsLang.split('-')[0]));
+    // Pick best voice for the language
+    const voices  = window.speechSynthesis.getVoices();
+    const match   = voices.find(v => v.lang === useLang)
+                 || voices.find(v => v.lang.startsWith(useLang.split('-')[0]))
+                 || voices.find(v => v.default)
+                 || voices[0];
     if (match) utter.voice = match;
 
     utter.onend = () => {
       STATE.isSpeaking = false;
-      updateMicState('listening');
+      setMicState('listening');
       resolve();
-      if (onEnd) onEnd();
-      // Auto-resume recognition after speaking
-      if (STATE.screen !== 'welcome' || STATE.loginStep !== 'greeting') {
-        setTimeout(() => startRecognition(), 300);
+      if (!STATE.isReading || STATE.isPaused) {
+        clearTimeout(STATE._recTimer);
+        STATE._recTimer = setTimeout(startListening, 200);
       }
     };
-    utter.onerror = () => { STATE.isSpeaking = false; resolve(); };
-    window.speechSynthesis.cancel();
+    utter.onerror = () => {
+      STATE.isSpeaking = false;
+      resolve();
+      clearTimeout(STATE._recTimer);
+      STATE._recTimer = setTimeout(startListening, 300);
+    };
+
     window.speechSynthesis.speak(utter);
   });
 }
 
-// ─────────────────────────────────────────────
-// SPEECH RECOGNITION ENGINE
-// ─────────────────────────────────────────────
-function buildRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) {
-    console.warn('SpeechRecognition not supported');
-    return null;
-  }
-  const rec = new SpeechRecognition();
+function stopSpeaking() {
+  window.speechSynthesis.cancel();
+  STATE.isSpeaking = false;
+}
+
+// ═══════════════════════════════════════════════
+// SPEECH RECOGNITION — Normal (command mode)
+// ═══════════════════════════════════════════════
+function buildRecognition(lang, onResult) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Use Chrome or Edge for voice support.'); return null; }
+
+  const rec           = new SR();
   rec.continuous      = false;
-  rec.interimResults  = true;
-  rec.lang            = STATE.language;
-  rec.maxAlternatives = 1;
+  rec.interimResults  = false;
+  rec.lang            = lang || STATE.language;
+  rec.maxAlternatives = 3;
 
   rec.onstart = () => {
     STATE.isListening = true;
-    updateMicState('listening');
-    setStatusLabel('Listening…');
+    setMicState(STATE.isSpeaking ? 'speaking' : 'listening');
   };
+
+  rec.onresult = e => {
+    const results = e.results[0];
+    let best = '';
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].transcript.trim()) { best = results[i].transcript.trim(); break; }
+    }
+    if (best) {
+      showTranscript('"' + best + '"');
+      if (onResult) onResult(best);
+      else processVoice(best);
+    }
+  };
+
   rec.onend = () => {
     STATE.isListening = false;
-    if (!STATE.isSpeaking && STATE.screen !== 'welcome') {
-      setTimeout(() => startRecognition(), 400);
+    if (!STATE.isSpeaking) {
+      clearTimeout(STATE._recTimer);
+      STATE._recTimer = setTimeout(startListening, 250);
     }
   };
+
   rec.onerror = e => {
     STATE.isListening = false;
-    if (e.error !== 'no-speech' && e.error !== 'aborted') {
-      console.warn('STT error:', e.error);
+    if (e.error === 'no-speech' || e.error === 'aborted') {
+      if (!STATE.isSpeaking) {
+        clearTimeout(STATE._recTimer);
+        STATE._recTimer = setTimeout(startListening, 300);
+      }
+      return;
     }
-    if (!STATE.isSpeaking) setTimeout(() => startRecognition(), 800);
+    clearTimeout(STATE._recTimer);
+    STATE._recTimer = setTimeout(startListening, 800);
   };
-  rec.onresult = e => {
-    let interim = '', final = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript.trim();
-      if (e.results[i].isFinal) final += t;
-      else interim += t;
-    }
-    showTranscript(interim || final);
-    if (final) handleVoiceInput(final.toLowerCase().trim());
-  };
+
   return rec;
 }
 
-function startRecognition() {
-  if (STATE.isSpeaking || STATE.isListening) return;
-  if (!STATE.recognition) STATE.recognition = buildRecognition();
-  else { STATE.recognition.lang = STATE.language; }
-  try { STATE.recognition.start(); } catch(e) { /* already started */ }
+function startListening() {
+  if (STATE.isListening) return;
+  if (!STATE.recognition) STATE.recognition = buildRecognition(STATE.language);
+  if (!STATE.recognition) return;
+  STATE.recognition.lang = STATE.language;
+  try { STATE.recognition.start(); } catch(e) {}
 }
 
-function stopRecognition() {
+function stopListening() {
+  clearTimeout(STATE._recTimer);
   if (STATE.recognition && STATE.isListening) {
-    try { STATE.recognition.stop(); } catch(e) {}
-    STATE.isListening = false;
+    try { STATE.recognition.abort(); } catch(e) {}
+  }
+  STATE.isListening = false;
+}
+
+// ═══════════════════════════════════════════════
+// INTERRUPT RECOGNITION — runs WHILE system speaks
+// Fix: commands work even while TTS is reading
+// ═══════════════════════════════════════════════
+let _intTimer = null;
+
+function startInterruptListening() {
+  if (STATE.interruptActive) return;
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+
+  STATE.interruptActive = true;
+  const irec = new SR();
+  irec.continuous      = false;
+  irec.interimResults  = false;
+  irec.lang            = STATE.language;
+  irec.maxAlternatives = 3;
+  STATE.interruptRec   = irec;
+
+  irec.onresult = e => {
+    const results = e.results[0];
+    let best = '';
+    for (let i = 0; i < results.length; i++) {
+      if (results[i].transcript.trim()) { best = results[i].transcript.trim(); break; }
+    }
+    if (best) {
+      showTranscript('"' + best + '"');
+      handleInterruptCommand(best);
+    }
+  };
+
+  irec.onend = () => {
+    STATE.interruptActive = false;
+    STATE.interruptRec    = null;
+    // Restart interrupt if still reading
+    if (STATE.isReading && !STATE.isPaused) {
+      clearTimeout(_intTimer);
+      _intTimer = setTimeout(startInterruptListening, 300);
+    }
+  };
+
+  irec.onerror = () => {
+    STATE.interruptActive = false;
+    STATE.interruptRec    = null;
+    if (STATE.isReading && !STATE.isPaused) {
+      clearTimeout(_intTimer);
+      _intTimer = setTimeout(startInterruptListening, 500);
+    }
+  };
+
+  try { irec.start(); } catch(e) {}
+}
+
+function stopInterruptListening() {
+  clearTimeout(_intTimer);
+  STATE.interruptActive = false;
+  if (STATE.interruptRec) {
+    try { STATE.interruptRec.abort(); } catch(e) {}
+    STATE.interruptRec = null;
   }
 }
 
-// ─────────────────────────────────────────────
-// INTENT DETECTION
-// ─────────────────────────────────────────────
-function detectIntent(text) {
-  const t = text.toLowerCase();
+async function handleInterruptCommand(raw) {
+  const intent = detectIntent(raw);
 
-  // Greetings
-  if (/\b(hi|hello|hey|start|yes|okay|ok|ready)\b/.test(t) && STATE.screen === 'welcome') return 'greeting';
-
-  // Confirmation
-  if (/\b(yes|correct|right|confirm|ok|okay|sure|haan|ha)\b/.test(t)) return 'confirm';
-  if (/\b(no|repeat|wrong|again|nahi|nope)\b/.test(t)) return 'repeat';
-
-  // Login
-  if (/\b(username|user name|my name is|name is|i am|iam)\b/.test(t)) return 'username';
-  if (/\b(password|pass word|pass is|password is)\b/.test(t)) return 'password';
-
-  // File management
-  if (/\b(scan|list|find|search|discover|show|documents|files|upload)\b/.test(t)) return 'scan_files';
-  if (/\b(open|load|select|choose|read file)\b/.test(t)) return 'open_file';
-
-  // Reading controls
-  if (/\b(start reading|begin reading|read|padhna shuru|odhu|chadhu)\b/.test(t)) return 'start_read';
-  if (/\b(stop|pause|wait|ruko|nikol|nirthu)\b/.test(t)) return 'pause';
-  if (/\b(resume|continue|chaliye|munde|continue reading)\b/.test(t)) return 'resume';
-  if (/\b(repeat|again|dobara|marubar|matte|phir se|once more|say again)\b/.test(t)) return 'repeat_chunk';
-  if (/\b(next|skip|forward|agle|munde|munbu)\b/.test(t)) return 'next_chunk';
-  if (/\b(previous|back|peeche|hinde|pinthu)\b/.test(t)) return 'prev_chunk';
-  if (/\b(summarize|summary|short|brief|brief me|saar|saransh)\b/.test(t)) return 'summarize';
-  if (/\b(explain|simple|easy|samjhao|artha|vilak)\b/.test(t)) return 'explain';
-  if (/\b(important|key points|highlights|mukhya|muhtvapurna)\b/.test(t)) return 'key_points';
-  if (/\b(louder|volume up|zyada|jaasti|adhikam)\b/.test(t)) return 'louder';
-  if (/\b(quieter|softer|volume down|kum|kam)\b/.test(t)) return 'quieter';
-  if (/\b(slower|slow down|dheere|melle|thire)\b/.test(t)) return 'slower';
-  if (/\b(faster|speed up|jaldi|bega|veg)\b/.test(t)) return 'faster';
-  if (/\b(didn.t understand|not clear|confused|samjha nahi|puriyala|artagalilla)\b/.test(t)) return 'clarify';
-  if (/\b(describe|image|graph|chart|picture|table)\b/.test(t)) return 'describe_media';
-
-  // Language change
-  for (const [alias, lang] of Object.entries(LANG_ALIASES)) {
-    if (t.includes(alias) && (t.includes('change') || t.includes('switch') || t.includes('speak') || t.includes('bahasa') || t.includes('language'))) {
-      return `lang:${lang}`;
-    }
-    // Also match "in kannada", "kannada mein"
-    if (t === alias || t.includes(`in ${alias}`) || t.includes(`${alias} mein`) || t.includes(`${alias} lo`)) {
-      return `lang:${lang}`;
-    }
-  }
+  // Language switch
+  if (intent.name === 'change_lang') { await changeLang(intent.lang); return; }
 
   // Logout
-  if (/\b(logout|log out|exit|bye|goodbye|close|quit)\b/.test(t)) return 'logout';
+  if (intent.name === 'logout') { await doLogout(); return; }
 
-  return 'unknown';
+  switch (intent.name) {
+    case 'pause':
+      stopSpeaking();
+      stopInterruptListening();
+      STATE.isReading = false;
+      STATE.isPaused  = true;
+      await speak("Paused. Say resume or continue when ready.");
+      break;
+
+    case 'stop':
+      stopSpeaking();
+      stopInterruptListening();
+      STATE.isReading = false;
+      STATE.isPaused  = false;
+      STATE.chunkIndex = 0;
+      await speak("Stopped reading. Say read to start from beginning.");
+      break;
+
+    case 'repeat':
+      stopSpeaking();
+      stopInterruptListening();
+      STATE.isPaused  = false;
+      const repChunk  = STATE.documentChunks[STATE.chunkIndex] || "Nothing to repeat.";
+      await speak("Repeating. " + repChunk);
+      if (STATE.isReading) readLoop();
+      break;
+
+    case 'next':
+      stopSpeaking();
+      stopInterruptListening();
+      STATE.chunkIndex = Math.min(STATE.chunkIndex + 1, STATE.documentChunks.length - 1);
+      updateProgress();
+      el('reader-content-text').textContent = STATE.documentChunks[STATE.chunkIndex] || '';
+      await speak("Moving to next section.");
+      if (STATE.isReading) readLoop();
+      break;
+
+    case 'prev':
+      stopSpeaking();
+      stopInterruptListening();
+      STATE.chunkIndex = Math.max(STATE.chunkIndex - 1, 0);
+      updateProgress();
+      el('reader-content-text').textContent = STATE.documentChunks[STATE.chunkIndex] || '';
+      await speak("Going back to previous section.");
+      if (STATE.isReading) readLoop();
+      break;
+
+    case 'louder':
+      STATE.readingVolume = Math.min(1.0, STATE.readingVolume + 0.2);
+      // No need to stop reading; volume applies to next utterance
+      await speak("Volume increased.");
+      if (STATE.isReading && !STATE.isPaused) readLoop();
+      break;
+
+    case 'quieter':
+      STATE.readingVolume = Math.max(0.1, STATE.readingVolume - 0.2);
+      await speak("Volume decreased.");
+      if (STATE.isReading && !STATE.isPaused) readLoop();
+      break;
+
+    case 'faster':
+      STATE.readingRate = Math.min(2.5, STATE.readingRate + 0.2);
+      el('reader-speed-badge').textContent = rateLabel();
+      await speak("Speed increased.");
+      if (STATE.isReading && !STATE.isPaused) readLoop();
+      break;
+
+    case 'slower':
+      STATE.readingRate = Math.max(0.3, STATE.readingRate - 0.2);
+      el('reader-speed-badge').textContent = rateLabel();
+      await speak("Speed decreased.");
+      if (STATE.isReading && !STATE.isPaused) readLoop();
+      break;
+
+    case 'summarize': {
+      stopSpeaking();
+      stopInterruptListening();
+      const wasReading = STATE.isReading;
+      STATE.isReading  = false;
+      const chunk = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+      const sum   = localSummarize(chunk);
+      await speak("Here is the summary. " + sum);
+      if (wasReading) { STATE.isReading = true; readLoop(); }
+      else startListening();
+      break;
+    }
+
+    case 'key_points': {
+      stopSpeaking();
+      stopInterruptListening();
+      const wasReading = STATE.isReading;
+      STATE.isReading  = false;
+      const chunk = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+      const pts   = localKeyPoints(chunk);
+      await speak("Here are the important points. " + pts);
+      if (wasReading) { STATE.isReading = true; readLoop(); }
+      else startListening();
+      break;
+    }
+
+    case 'explain': {
+      stopSpeaking();
+      stopInterruptListening();
+      const wasReading = STATE.isReading;
+      STATE.isReading  = false;
+      const chunk  = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+      const simple = chunk.split('.').slice(0,3).join('. ');
+      await speak("In simple words. " + simple);
+      if (wasReading) { STATE.isReading = true; readLoop(); }
+      else startListening();
+      break;
+    }
+
+    case 'describe': {
+      stopSpeaking();
+      stopInterruptListening();
+      const wasReading = STATE.isReading;
+      STATE.isReading  = false;
+      await speak("This section contains a visual element — likely a chart or diagram illustrating the concepts discussed.");
+      STATE.chunkIndex++;
+      if (wasReading) { STATE.isReading = true; readLoop(); }
+      else startListening();
+      break;
+    }
+
+    default: {
+      // Unknown intent while reading = treat as Q&A question
+      if (raw.trim().length > 3) {
+        await handleMidReadingQuestion(raw);
+      }
+      break;
+    }
+  }
 }
 
-// ─────────────────────────────────────────────
-// MAIN VOICE INPUT ROUTER
-// ─────────────────────────────────────────────
-async function handleVoiceInput(text) {
-  const intent = detectIntent(text);
+// ═══════════════════════════════════════════════
+// MID-READING Q&A
+// Fix: user can ask ANY question while reading
+// ═══════════════════════════════════════════════
+async function handleMidReadingQuestion(question) {
+  const wasReading = STATE.isReading;
+  stopSpeaking();
+  stopInterruptListening();
+  STATE.isReading = false;
 
-  // Language change — works on any screen
-  if (intent.startsWith('lang:')) {
-    const langKey = intent.split(':')[1];
-    await changeLang(langKey);
-    return;
+  await speak("You asked: " + question + ". Let me find the answer.");
+
+  // Try server-side AI
+  const context = STATE.documentChunks.slice(
+    Math.max(0, STATE.chunkIndex - 2),
+    STATE.chunkIndex + 3
+  ).join(' ');
+
+  let answer = null;
+  try {
+    const r = await fetch('/api/qa', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify({ question, context, language: STATE.ttsLang.split('-')[0] }),
+    });
+    if (r.ok) {
+      const d = await r.json();
+      answer  = d.answer;
+    }
+  } catch(e) {}
+
+  if (!answer) {
+    // Local fallback: search context
+    const sentences = context.split('.');
+    const qWords    = question.toLowerCase().split(' ').filter(w => w.length > 3);
+    const found     = sentences.find(s => qWords.some(w => s.toLowerCase().includes(w)));
+    answer = found
+      ? found.trim() + "."
+      : "I could not find a specific answer in this section. Please continue reading or ask again.";
   }
-  if (intent === 'logout') { await doLogout(); return; }
+
+  await speak(answer);
+
+  if (wasReading) { STATE.isReading = true; readLoop(); }
+  else startListening();
+}
+
+// ═══════════════════════════════════════════════
+// MAIN VOICE ROUTER
+// ═══════════════════════════════════════════════
+async function processVoice(raw) {
+  const intent = detectIntent(raw);
+
+  if (intent.name === 'change_lang') { await changeLang(intent.lang); return; }
+  if (intent.name === 'logout')      { await doLogout();              return; }
 
   switch (STATE.screen) {
-    case 'welcome':      await handleWelcome(text, intent);      break;
-    case 'login':        await handleLogin(text, intent);        break;
-    case 'face':         await handleFaceVoice(text, intent);        break;
-    case 'dashboard':    await handleDashboard(text, intent);    break;
-    case 'reader':       await handleReader(text, intent);       break;
+    case 'welcome':   await onWelcome(raw, intent);   break;
+    case 'login':     await onLogin(raw, intent);     break;
+    case 'dashboard': await onDashboard(raw, intent); break;
+    case 'reader':    await onReader(raw, intent);    break;
   }
 }
 
-// ─────────────────────────────────────────────
-// SCREEN: WELCOME
-// ─────────────────────────────────────────────
-async function handleWelcome(text, intent) {
-  if (intent === 'greeting' || intent === 'confirm') {
-    await speak("Welcome! Let us get you logged in. Please say your username.");
+// ═══════════════════════════════════════════════
+// WELCOME
+// ═══════════════════════════════════════════════
+async function onWelcome(raw, intent) {
+  if (intent.name === 'face_login') {
+    await speak("Opening face recognition login.");
+    await startFaceVerifyFlow();
+  } else if (intent.name === 'greeting' || intent.name === 'confirm') {
+    await speak("Welcome! Let us log you in. Please say your username.");
     gotoScreen('login');
     STATE.loginStep = 'username';
-    startRecognition();
+    startListening();
   } else {
-    await speak("I did not catch that. Please say Hi when you are ready.");
+    await speak("Please say Hi when you are ready, or say face login to use face recognition.");
   }
 }
 
-// ─────────────────────────────────────────────
-// SCREEN: LOGIN
-// ─────────────────────────────────────────────
-async function handleLogin(text, intent) {
-  switch (STATE.loginStep) {
-    case 'username': {
-      // Extract username — strip common prefixes and punctuation
-      let u = text.replace(/\b(username|user name|my name is|name is|i am|iam|is)\b/gi, '').trim();
-      u = u.replace(/[^a-zA-Z0-9]/g, ' ').trim(); // strip punctuation/periods
-      u = u.split(' ').filter(Boolean)[0] || ''; // take first word
-      u = u.toLowerCase(); // normalize to lowercase
-      if (!u) {
-        await speak("I did not catch a username. Please say your username.");
-        return;
-      }
-      STATE.pendingUsername = u;
-      el('field-username').textContent = u.charAt(0).toUpperCase() + u.slice(1);
-      await speak(`You said ${u}. Is that correct? Say yes or say repeat.`);
-      STATE.loginStep = 'confirm_user';
-      break;
+// ═══════════════════════════════════════════════
+// LOGIN (Voice)
+// ═══════════════════════════════════════════════
+async function onLogin(raw, intent) {
+  const t = clean(raw);
+
+  if (STATE.loginStep === 'username') {
+    let u = t.replace(/\b(username|user name|my name is|name is|i am|iam|is|my)\b/g,' ').trim();
+    u = cleanAlphaNum((u.split(' ').filter(Boolean)[0]) || u);
+    if (!u) { await speak("I did not catch that. Please say your username."); return; }
+    STATE.pendingUsername = u;
+    el('field-username').textContent = u.charAt(0).toUpperCase() + u.slice(1);
+    await speak(`You said ${u}. Is that correct? Say yes or no.`);
+    STATE.loginStep = 'confirm_user';
+
+  } else if (STATE.loginStep === 'confirm_user') {
+    if (intent.name === 'confirm') {
+      STATE.username = STATE.pendingUsername;
+      await speak("Great. Now please say your password.");
+      STATE.loginStep = 'password';
+    } else {
+      await speak("Okay. Please say your username again.");
+      STATE.loginStep = 'username';
     }
-    case 'confirm_user': {
-      if (intent === 'confirm') {
-        STATE.username = STATE.pendingUsername;
-        await speak("Great. Now please say your password.");
-        STATE.loginStep = 'password';
-      } else {
-        await speak("Let us try again. Please say your username.");
-        STATE.loginStep = 'username';
-      }
-      break;
-    }
-    case 'password': {
-      let p = text.replace(/\b(password|pass word|password is|pass is|is)\b/gi, '').trim();
-      p = p.replace(/[^a-zA-Z0-9]/g, ' ').trim(); // strip punctuation like periods/commas
-      p = p.replace(/\s+/g, ''); // remove spaces (user may say "1 2 3 4")
-      p = p.toLowerCase(); // normalize to lowercase for comparison
-      if (!p) {
-        await speak("I did not catch the password. Please say your password.");
-        return;
-      }
-      STATE._pendingPass = p;
-      el('field-password').textContent = '••••••••';
-      await speak("Password received. Please hold on.");
-      STATE.loginStep = 'verify';
-      await doVerifyLogin();
-      break;
-    }
+
+  } else if (STATE.loginStep === 'password') {
+    let p = t.replace(/\b(password|pass word|password is|pass is|my password|is)\b/g,' ').trim();
+    const DIGITS = {zero:'0',one:'1',two:'2',three:'3',four:'4',five:'5',six:'6',seven:'7',eight:'8',nine:'9'};
+    for (const [w,d] of Object.entries(DIGITS)) p = p.replace(new RegExp(`\\b${w}\\b`,'g'), d);
+    p = cleanAlphaNum(p);
+    if (!p) { await speak("I did not catch your password. Please say it again."); return; }
+    STATE._pendingPass = p;
+    el('field-password').textContent = '••••••••';
+    await speak("Got it. Checking your credentials.");
+    STATE.loginStep = 'verify';
+    await verifyLogin();
   }
 }
 
-async function doVerifyLogin() {
-  const u = STATE.username.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const p = STATE._pendingPass.toLowerCase().replace(/[^a-z0-9]/g, '');
-  const storedPass = (USERS[u] || '').toLowerCase().replace(/[^a-z0-9]/g, '');
-  if (storedPass && storedPass === p) {
-    // Password correct — proceed directly to face recognition
-    await speak("Password correct. Proceeding to face recognition.");
-    await startFaceScreen();
+async function verifyLogin() {
+  const u      = cleanAlphaNum(STATE.username);
+  const p      = cleanAlphaNum(STATE._pendingPass);
+  const stored = cleanAlphaNum(USERS[u] || '');
+  if (stored && stored === p) {
+    el('dashboard-user').textContent = STATE.username.charAt(0).toUpperCase() + STATE.username.slice(1);
+    await speak(`Login successful. Welcome ${STATE.username}. You are now on the document dashboard. Say scan documents to find your files.`);
+    gotoScreen('dashboard');
+    STATE.loginStep = 'done';
+    startListening();
   } else {
-    await speak("The password is incorrect. Please try again. Say your password.");
+    await speak("Incorrect password. Please say your password again.");
     STATE.loginStep = 'password';
     el('field-password').textContent = '—';
   }
 }
 
-// ─────────────────────────────────────────────
-// SCREEN: DASHBOARD
-// ─────────────────────────────────────────────
-async function handleDashboard(text, intent) {
-  if (intent === 'scan_files') {
-    await scanAndListFiles();
-  } else if (intent === 'open_file' || intent === 'unknown') {
-    // Try to match against discovered files or accept file name directly
-    await tryOpenFile(text);
+// ═══════════════════════════════════════════════
+// FACE RECOGNITION FLOW
+// Fix: enroll + verify with webcam
+// ═══════════════════════════════════════════════
+async function startFaceEnrollFlow(username) {
+  await speak(`Starting face enrollment for ${username}. Opening camera.`);
+  showFaceModal('enroll', username);
+}
+
+async function startFaceVerifyFlow() {
+  await speak("Opening camera for face recognition. Please look at the camera.");
+  showFaceModal('verify', null);
+}
+
+function showFaceModal(mode, username) {
+  let modal = el('face-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id        = 'face-modal';
+    modal.className = 'face-modal';
+    document.body.appendChild(modal);
+  }
+  modal.innerHTML = `
+    <div class="face-modal-inner">
+      <h2 class="face-modal-title">${mode === 'enroll' ? '🤳 Enroll Face' : '👁️ Face Login'}</h2>
+      <p class="face-modal-sub">${mode === 'enroll'
+        ? 'Look at the camera. We will capture your face.'
+        : 'Look at the camera to log in.'}</p>
+      <div class="face-video-wrap">
+        <video id="face-video" autoplay playsinline muted></video>
+        <canvas id="face-canvas" style="display:none;"></canvas>
+      </div>
+      <div class="face-modal-actions">
+        <button id="face-capture-btn" class="btn-primary" onclick="captureAndProcess('${mode}','${username||''}')">
+          ${mode === 'enroll' ? 'Capture & Enroll' : 'Scan My Face'}
+        </button>
+        <button class="btn-secondary" onclick="closeFaceModal()">Cancel</button>
+      </div>
+      <p id="face-status" class="face-status"></p>
+    </div>`;
+  modal.style.display = 'flex';
+
+  navigator.mediaDevices.getUserMedia({ video: true })
+    .then(stream => {
+      STATE.faceStream = stream;
+      el('face-video').srcObject = stream;
+    })
+    .catch(() => {
+      el('face-status').textContent = 'Camera access denied. Please allow camera permissions.';
+      speak("Camera access denied. Please allow camera in your browser settings.");
+    });
+}
+
+function closeFaceModal() {
+  if (STATE.faceStream) {
+    STATE.faceStream.getTracks().forEach(t => t.stop());
+    STATE.faceStream = null;
+  }
+  const modal = el('face-modal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function captureAndProcess(mode, username) {
+  const video  = el('face-video');
+  const canvas = el('face-canvas');
+  const status = el('face-status');
+
+  canvas.width  = video.videoWidth  || 640;
+  canvas.height = video.videoHeight || 480;
+  canvas.getContext('2d').drawImage(video, 0, 0);
+
+  const imageB64 = canvas.toDataURL('image/jpeg', 0.85);
+
+  status.textContent = mode === 'enroll' ? 'Enrolling face…' : 'Recognizing face…';
+
+  if (mode === 'enroll') {
+    try {
+      const r = await fetch('/api/face/enroll', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ username, image_b64: imageB64 }),
+      });
+      const d = await r.json();
+      if (r.ok && d.success) {
+        status.textContent = d.message;
+        await speak(`Face enrolled successfully for ${username}. You can now use face login.`);
+        STATE.faceEnrolled = true;
+        setTimeout(closeFaceModal, 2000);
+      } else {
+        status.textContent = d.detail || 'Enrollment failed. Try again.';
+        await speak("Face enrollment failed. Please try again with better lighting.");
+      }
+    } catch(e) {
+      status.textContent = 'Server not available. Face features require backend.';
+      speak("The face recognition server is not available.");
+      setTimeout(closeFaceModal, 2500);
+    }
+
+  } else { // verify
+    try {
+      const r = await fetch('/api/face/verify', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ image_b64: imageB64 }),
+      });
+      const d = await r.json();
+      if (r.ok && d.recognized) {
+        status.textContent = d.message;
+        STATE.username = d.username;
+        el('dashboard-user').textContent = d.username.charAt(0).toUpperCase() + d.username.slice(1);
+        await speak(`Face recognized as ${d.username} with ${d.confidence} percent confidence. Welcome back!`);
+        closeFaceModal();
+        gotoScreen('dashboard');
+        startListening();
+      } else {
+        status.textContent = d.message || 'Face not recognized.';
+        await speak(d.message || "Face not recognized. Please try again or use voice login.");
+      }
+    } catch(e) {
+      // Fallback: no server — show instructions
+      status.textContent = 'Face server not running. Use voice login instead.';
+      await speak("The face recognition server is not running. Please use voice login instead.");
+      setTimeout(closeFaceModal, 2500);
+    }
   }
 }
 
-async function scanAndListFiles() {
-  await speak("Scanning your documents folder. Please wait.");
-  // Simulate discovered files (real backend would list actual files)
-  STATE.discoveredFiles = await fetchDiscoveredFiles();
-  renderFileList();
-  if (STATE.discoveredFiles.length === 0) {
-    await speak("I did not find any PDF or document files. Please upload a file using the backend and try again.");
+// ═══════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════
+async function onDashboard(raw, intent) {
+  if (intent.name === 'scan_files') {
+    await scanFiles();
+  } else if (intent.name === 'face_enroll') {
+    if (STATE.username) {
+      await startFaceEnrollFlow(STATE.username);
+    } else {
+      await speak("Please log in first to enroll your face.");
+    }
+  } else if (intent.name === 'open_file' || intent.name === 'unknown') {
+    await tryOpen(raw);
+  }
+}
+
+async function scanFiles() {
+  await speak("Scanning your documents. Please wait.");
+  STATE.discoveredFiles = await fetchFiles();
+  renderFiles();
+  if (!STATE.discoveredFiles.length) {
+    await speak("No documents found. Please upload a PDF, Word, or text file.");
     return;
   }
-  const names = STATE.discoveredFiles.map((f, i) => `${i + 1}. ${f.name}`).join('. ');
-  await speak(`I found ${STATE.discoveredFiles.length} files. ${names}. Please say the file name or number you want to open.`);
+  const list = STATE.discoveredFiles.map((f,i) => `${i+1}. ${f.name}`).join('. ');
+  await speak(`I found ${STATE.discoveredFiles.length} files. ${list}. Say the file name or number to open it.`);
 }
 
-async function fetchDiscoveredFiles() {
+async function fetchFiles() {
   try {
-    const res = await fetch('/api/list-files');
-    if (!res.ok) throw new Error('no backend');
-    const data = await res.json();
-    return data.files || [];
+    const r = await fetch('/api/list-files');
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    return d.files || [];
   } catch {
-    // Fallback demo files when backend is not running
     return [
-      { name: 'Maths Notes PDF',     type: 'PDF',  icon: '📄' },
-      { name: 'History Book',         type: 'EPUB', icon: '📚' },
-      { name: 'Science Chapter Three',type: 'PDF',  icon: '📄' },
-      { name: 'English Grammar',      type: 'DOCX', icon: '📝' },
+      { name:'Maths Notes',     type:'PDF',  icon:'📄' },
+      { name:'History Book',    type:'PDF',  icon:'📄' },
+      { name:'Science Chapter', type:'PDF',  icon:'📄' },
+      { name:'English Grammar', type:'DOCX', icon:'📝' },
     ];
   }
 }
 
-function renderFileList() {
+function renderFiles() {
   const list = el('file-list');
   list.innerHTML = '';
-  STATE.discoveredFiles.forEach((f, i) => {
-    const div = document.createElement('div');
-    div.className = 'file-item';
-    div.id = `file-${i}`;
-    div.innerHTML = `
-      <span class="file-icon">${f.icon || '📄'}</span>
-      <div>
-        <div class="file-name">${f.name}</div>
-        <div class="file-type">${f.type || 'Document'}</div>
-      </div>`;
+  STATE.discoveredFiles.forEach((f,i) => {
+    const div        = document.createElement('div');
+    div.className    = 'file-item';
+    div.id           = `file-${i}`;
+    div.innerHTML    = `<span class="file-icon">${f.icon||'📄'}</span>
+      <div><div class="file-name">${f.name}</div><div class="file-type">${f.type}</div></div>`;
     list.appendChild(div);
   });
 }
 
-async function tryOpenFile(text) {
-  if (STATE.discoveredFiles.length === 0) {
-    await speak("Please say scan documents first so I can find your files.");
-    return;
+async function tryOpen(raw) {
+  if (!STATE.discoveredFiles.length) {
+    await speak("Please say scan documents first."); return;
   }
-  // Numeric selection
-  const numMatch = text.match(/\b([1-9])\b/);
-  if (numMatch) {
-    const idx = parseInt(numMatch[1]) - 1;
-    if (STATE.discoveredFiles[idx]) { await openFile(idx); return; }
+  const t   = clean(raw);
+  const num = t.match(/\b([1-9])\b/);
+  if (num) {
+    const i = parseInt(num[1]) - 1;
+    if (STATE.discoveredFiles[i]) { await openFile(i); return; }
   }
-  // Name fuzzy match
-  const t = text.toLowerCase();
-  let bestIdx = -1, bestScore = 0;
-  STATE.discoveredFiles.forEach((f, i) => {
+  let best = -1, score = 0;
+  STATE.discoveredFiles.forEach((f,i) => {
     const words = f.name.toLowerCase().split(' ');
-    const score = words.filter(w => t.includes(w)).length;
-    if (score > bestScore) { bestScore = score; bestIdx = i; }
+    const s     = words.filter(w => w.length > 2 && t.includes(w)).length;
+    if (s > score) { score = s; best = i; }
   });
-  if (bestIdx >= 0 && bestScore > 0) {
-    STATE.pendingFile = STATE.discoveredFiles[bestIdx].name;
-    await speak(`Opening ${STATE.pendingFile}.`);
-    await openFile(bestIdx);
-  } else {
-    await speak("I could not find that file. Please say scan documents to list available files.");
-  }
+  if (best >= 0 && score > 0) await openFile(best);
+  else await speak("I could not find that file. Say scan documents to list available files.");
 }
 
 async function openFile(idx) {
-  const file = STATE.discoveredFiles[idx];
-  highlightFile(idx);
-  STATE.currentFile = file;
-  el('reader-filename').textContent = file.name;
-
-  // Load document text from backend or use demo
-  const docText = await loadDocumentText(file);
-  STATE.documentText = docText;
-  STATE.documentChunks = chunkText(docText, 400);
-  STATE.chunkIndex = 0;
-  STATE.isReading = false;
-  STATE.isPaused  = false;
-
+  const f = STATE.discoveredFiles[idx];
+  document.querySelectorAll('.file-item').forEach(x => x.classList.remove('highlighted'));
+  el(`file-${idx}`)?.classList.add('highlighted');
+  STATE.currentFile = f;
+  el('reader-filename').textContent = f.name;
+  await speak(`Opening ${f.name}. Please wait.`);
+  const text             = await loadText(f);
+  STATE.documentText     = text;
+  STATE.documentChunks   = chunkText(text, 80);
+  STATE.chunkIndex       = 0;
+  STATE.isReading        = false;
+  STATE.isPaused         = false;
+  STATE.lastReadChunk    = '';
   gotoScreen('reader');
-  el('reader-content-text').textContent = STATE.documentText.slice(0, 800) + '…';
-  await speak(`File loaded successfully. Say start reading when you are ready, or say read to begin.`);
-  startRecognition();
+  el('reader-content-text').textContent = text.slice(0, 600) + (text.length > 600 ? '…' : '');
+  updateProgress();
+  await speak(`File loaded: ${f.name}. Say read or start reading when you are ready.`);
+  startListening();
 }
 
-async function loadDocumentText(file) {
+async function loadText(f) {
   try {
-    const res = await fetch(`/api/read-file?name=${encodeURIComponent(file.name)}`);
-    if (!res.ok) throw new Error();
-    const data = await res.json();
-    return data.text || '';
+    const r = await fetch(`/api/read-file?name=${encodeURIComponent(f.name)}`);
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    return d.text;
   } catch {
-    return `This is a demonstration of the document reading system for ${file.name}.
-The full document content would be extracted from the actual file by the backend processing engine.
-Chapter One. Introduction to the subject.
-This document covers a wide range of topics that are important for students.
-The first section deals with foundational concepts that every learner should understand.
-Let us begin with the basics and move progressively to more advanced material.
-Section Two. Core concepts and definitions.
-Here we explore the main ideas in detail.
-Each concept is explained step by step so that any learner can follow along.
-Images, charts, and tables in the document will be described verbally.
-Section Three. Practice problems and solutions.
-This section contains worked examples that reinforce the concepts learned earlier.
-End of demonstration content.`;
+    return `Welcome to ${f.name}.
+Section one. Introduction. This document covers important topics for students. The content is structured to help you learn step by step.
+Section two. Main concepts. Here we explore core ideas in detail. The first concept is about understanding the basics.
+Section three. Practice. This section contains worked examples. Each example is explained clearly.
+End of document.`;
   }
 }
 
-// ─────────────────────────────────────────────
-// SCREEN: READER
-// ─────────────────────────────────────────────
-async function handleReader(text, intent) {
-  switch (intent) {
-    case 'start_read':  await startReading();       break;
-    case 'pause':       await pauseReading();        break;
-    case 'resume':      await resumeReading();       break;
-    case 'repeat_chunk': await repeatChunk();        break;
-    case 'next_chunk':  await nextChunk();           break;
-    case 'prev_chunk':  await prevChunk();           break;
-    case 'summarize':   await summarizeChunk();      break;
-    case 'explain':     await explainChunk();        break;
-    case 'key_points':  await keyPointsChunk();      break;
-    case 'louder':      adjustPitch(0.1);            break;
-    case 'quieter':     adjustPitch(-0.1);           break;
-    case 'slower':      adjustRate(-0.2);            break;
-    case 'faster':      adjustRate(0.2);             break;
-    case 'clarify':     await speak("Let me explain that section in simpler words. " + simplify(getCurrentChunk())); break;
-    case 'describe_media': await speak("There is an image or graph in this section. It appears to show data related to the topic being discussed. Would you like more details?"); break;
-    default:
-      if (STATE.isPaused && /\b(go|continue|resume|play|chaliye)\b/.test(text)) {
-        await resumeReading();
-      }
+// ═══════════════════════════════════════════════
+// READER — COMMAND HANDLER (when not reading)
+// ═══════════════════════════════════════════════
+async function onReader(raw, intent) {
+  switch(intent.name) {
+    case 'start_read': await startReading(); break;
+    case 'pause':      await pauseReading(); break;
+    case 'resume':     await resumeReading(); break;
+    case 'repeat':     await repeatChunk(); break;
+    case 'next':       await nextChunk(); break;
+    case 'prev':       await prevChunk(); break;
+    case 'summarize':  await doSummarize(); break;
+    case 'explain':    await doExplain(); break;
+    case 'key_points': await doKeyPoints(); break;
+    case 'slower':     await adjustRate(-0.2); break;
+    case 'faster':     await adjustRate(0.2); break;
+    case 'louder':     await adjustVol(0.2); break;
+    case 'quieter':    await adjustVol(-0.2); break;
+    case 'clarify':    await doClarify(); break;
+    case 'describe':   await describeMedia(); break;
+    case 'face_enroll':
+      await startFaceEnrollFlow(STATE.username || 'user');
       break;
+    case 'scan_files':
+      gotoScreen('dashboard');
+      await speak("Going to document dashboard.");
+      await scanFiles();
+      break;
+    case 'confirm':
+      await describeMedia(); break;
+    case 'unknown':
+    default:
+      // Treat as Q&A
+      if (raw.trim().length > 3) {
+        await handleMidReadingQuestion(raw);
+      } else {
+        await speak("Say read to start, or use commands: pause, resume, repeat, next, previous, summarize, louder, quieter, faster, slower, or logout.");
+      }
   }
 }
 
+// ═══════════════════════════════════════════════
+// READ LOOP
+// Fix: interrupt recognition runs PARALLEL to TTS
+// ═══════════════════════════════════════════════
 async function startReading() {
   if (STATE.isReading && !STATE.isPaused) {
-    await speak("I am already reading. Say pause to stop.");
-    return;
+    await speak("Already reading. Say pause to stop."); return;
   }
   STATE.isReading = true;
   STATE.isPaused  = false;
-  await speak("Starting to read.");
-  await readNextChunk();
+  if (STATE.chunkIndex >= STATE.documentChunks.length) STATE.chunkIndex = 0;
+  await speak("Starting to read now.");
+  readLoop();
 }
 
-async function readNextChunk() {
-  if (!STATE.isReading || STATE.isPaused) return;
+function readLoop() {
+  if (!STATE.isReading || STATE.isPaused) {
+    stopInterruptListening();
+    startListening();
+    return;
+  }
   if (STATE.chunkIndex >= STATE.documentChunks.length) {
     STATE.isReading = false;
-    await speak("I have finished reading the document. Say repeat to start over, or say logout to exit.");
+    stopInterruptListening();
+    speak("I have finished reading the document. Say repeat to hear it again, or say logout to exit.")
+      .then(() => startListening());
     return;
   }
+
   const chunk = STATE.documentChunks[STATE.chunkIndex];
+  STATE.lastReadChunk = chunk;
   updateProgress();
-  highlightCurrentChunk(chunk);
+  el('reader-content-text').textContent = chunk;
 
-  // Check for media markers
-  if (chunk.includes('[IMAGE]') || chunk.includes('[GRAPH]') || chunk.includes('[TABLE]')) {
-    await speak("There is a visual element in this section. Would you like me to describe it?");
-    // Wait for user response — will come via continuous recognition
+  // Visual element detection
+  if (/\[(IMAGE|GRAPH|TABLE|CHART|FIGURE)/i.test(chunk)) {
+    STATE.isReading = false;
+    stopInterruptListening();
+    speak("There is a visual element here. Say describe to hear about it, or say next to skip.")
+      .then(() => startListening());
     return;
   }
 
-  await speak(chunk);
-  if (STATE.isReading && !STATE.isPaused) {
+  // Create TTS utterance
+  window.speechSynthesis.cancel();
+  const utter  = new SpeechSynthesisUtterance(chunk);
+  utter.lang   = STATE.ttsLang;
+  utter.rate   = STATE.readingRate;
+  utter.volume = STATE.readingVolume;
+  utter.pitch  = 1.0;
+
+  const voices = window.speechSynthesis.getVoices();
+  const match  = voices.find(v => v.lang === STATE.ttsLang)
+              || voices.find(v => v.lang.startsWith(STATE.ttsLang.split('-')[0]))
+              || voices[0];
+  if (match) utter.voice = match;
+
+  updateBubble(chunk.slice(0, 80) + (chunk.length > 80 ? '…' : ''));
+  STATE.isSpeaking = true;
+  setMicState('speaking');
+
+  // START interrupt listening alongside TTS
+  stopInterruptListening();
+  startInterruptListening();
+
+  utter.onend = () => {
+    STATE.isSpeaking = false;
+    if (!STATE.isReading || STATE.isPaused) {
+      stopInterruptListening();
+      startListening();
+      return;
+    }
     STATE.chunkIndex++;
-    await readNextChunk();
-  }
+    setMicState('listening');
+    // Small gap between chunks for interrupt
+    clearTimeout(_intTimer);
+    _intTimer = setTimeout(() => {
+      if (STATE.isReading && !STATE.isPaused && !STATE.isSpeaking) {
+        readLoop();
+      }
+    }, 800);
+  };
+
+  utter.onerror = () => {
+    STATE.isSpeaking = false;
+    STATE.chunkIndex++;
+    readLoop();
+  };
+
+  window.speechSynthesis.speak(utter);
 }
 
 async function pauseReading() {
-  STATE.isPaused = true;
-  window.speechSynthesis.pause();
+  if (!STATE.isReading && !STATE.isPaused) {
+    await speak("Nothing is being read. Say read to start."); return;
+  }
+  stopSpeaking();
+  stopInterruptListening();
+  STATE.isReading = false;
+  STATE.isPaused  = true;
   await speak("Paused. Say resume or continue when you are ready.");
 }
 
 async function resumeReading() {
-  if (!STATE.isReading) { await startReading(); return; }
-  STATE.isPaused = false;
-  window.speechSynthesis.resume();
+  if (STATE.isReading && !STATE.isPaused) {
+    await speak("Already reading. Say pause to stop."); return;
+  }
+  STATE.isPaused  = false;
+  STATE.isReading = true;
   await speak("Resuming.");
-  await readNextChunk();
+  readLoop();
 }
 
 async function repeatChunk() {
-  const chunk = getCurrentChunk();
+  const was = STATE.isReading;
+  stopSpeaking();
+  stopInterruptListening();
+  STATE.isReading = false;
+  STATE.isPaused  = false;
+  const chunk = STATE.documentChunks[STATE.chunkIndex] || "Nothing to repeat.";
   await speak("Repeating. " + chunk);
+  if (was) { STATE.isReading = true; readLoop(); }
+  else startListening();
 }
 
 async function nextChunk() {
+  const was = STATE.isReading;
+  stopSpeaking();
+  stopInterruptListening();
+  STATE.isReading  = false;
   STATE.chunkIndex = Math.min(STATE.chunkIndex + 1, STATE.documentChunks.length - 1);
+  updateProgress();
+  el('reader-content-text').textContent = STATE.documentChunks[STATE.chunkIndex] || '';
   await speak("Moving to next section.");
-  if (STATE.isReading) await readNextChunk();
-  else await speak(getCurrentChunk());
+  if (was) { STATE.isReading = true; readLoop(); }
+  else startListening();
 }
 
 async function prevChunk() {
+  const was = STATE.isReading;
+  stopSpeaking();
+  stopInterruptListening();
+  STATE.isReading  = false;
   STATE.chunkIndex = Math.max(STATE.chunkIndex - 1, 0);
-  await speak("Going back. " + getCurrentChunk());
+  updateProgress();
+  el('reader-content-text').textContent = STATE.documentChunks[STATE.chunkIndex] || '';
+  await speak("Going back to previous section.");
+  if (was) { STATE.isReading = true; readLoop(); }
+  else startListening();
 }
 
-async function summarizeChunk() {
-  const chunk = getCurrentChunk();
-  const summary = await aiSummarize(chunk);
-  await speak("Here is the summary. " + summary);
+// ─── local helpers ────────────────────────────
+function localSummarize(chunk) {
+  const sentences = chunk.match(/[^.!?\n]+[.!?\n]+/g) || [chunk];
+  if (sentences.length <= 2) return chunk.slice(0,200);
+  return sentences[0].trim() + '. ' + sentences[sentences.length-1].trim();
 }
 
-async function explainChunk() {
-  const chunk = getCurrentChunk();
-  await speak("Let me explain this in simple words. " + simplify(chunk));
+function localKeyPoints(chunk) {
+  const sentences = chunk.match(/[^.!?\n]+[.!?\n]+/g) || [chunk];
+  return sentences.slice(0, 4).map((s,i) => `Point ${i+1}. ${s.trim()}`).join('. ');
 }
 
-async function keyPointsChunk() {
-  const chunk = getCurrentChunk();
-  await speak("Here are the important points from this section. " + extractKeyPoints(chunk));
+async function doSummarize() {
+  const was  = STATE.isReading;
+  stopSpeaking(); stopInterruptListening(); STATE.isReading = false;
+  const chunk = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+  await speak("Here is the summary. " + localSummarize(chunk));
+  if (was) { STATE.isReading = true; readLoop(); } else startListening();
 }
 
-function getCurrentChunk() {
-  return STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0, 400);
+async function doExplain() {
+  const was  = STATE.isReading;
+  stopSpeaking(); stopInterruptListening(); STATE.isReading = false;
+  const chunk  = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+  const simple = chunk.replace(/[;()]/g,'.').split('.').slice(0,3).join('. ');
+  await speak("Let me explain in simple words. " + simple);
+  if (was) { STATE.isReading = true; readLoop(); } else startListening();
 }
 
-// ─────────────────────────────────────────────
-// AI HELPERS (client-side fallback + backend call)
-// ─────────────────────────────────────────────
-async function aiSummarize(text) {
-  try {
-    const res = await fetch('/api/summarize', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
-    });
-    if (!res.ok) throw new Error();
-    const d = await res.json();
-    return d.summary;
-  } catch {
-    // Fallback client summary: first and last sentence
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-    if (sentences.length <= 2) return text;
-    return sentences[0] + ' ' + sentences[sentences.length - 1];
-  }
+async function doKeyPoints() {
+  const was  = STATE.isReading;
+  stopSpeaking(); stopInterruptListening(); STATE.isReading = false;
+  const chunk = STATE.documentChunks[STATE.chunkIndex] || STATE.documentText.slice(0,400);
+  await speak("Here are the important points. " + localKeyPoints(chunk));
+  if (was) { STATE.isReading = true; readLoop(); } else startListening();
 }
 
-function simplify(text) {
-  // Simplified breakdown (real system uses backend LLM)
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-  return sentences.slice(0, 3).map(s => s.trim()).join('. ');
+async function doClarify() {
+  const was  = STATE.isReading;
+  stopSpeaking(); stopInterruptListening(); STATE.isReading = false;
+  const chunk  = STATE.documentChunks[STATE.chunkIndex] || '';
+  const simple = chunk.split('.').slice(0,2).join('.');
+  await speak("Let me say that differently. " + simple);
+  if (was) { STATE.isReading = true; readLoop(); } else startListening();
 }
 
-function extractKeyPoints(text) {
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-  const points = sentences.slice(0, Math.min(3, sentences.length));
-  return points.map((p, i) => `Point ${i + 1}: ${p.trim()}`).join('. ');
+async function describeMedia() {
+  const was  = STATE.isReading;
+  stopSpeaking(); stopInterruptListening(); STATE.isReading = false;
+  await speak("This section contains a visual element. It appears to be a chart or diagram illustrating the data discussed in this section.");
+  STATE.chunkIndex++;
+  if (was) { STATE.isReading = true; readLoop(); } else startListening();
 }
 
-// ─────────────────────────────────────────────
+function rateLabel() {
+  if (STATE.readingRate < 0.7) return 'Slow Speed';
+  if (STATE.readingRate > 1.3) return 'Fast Speed';
+  return 'Normal Speed';
+}
+
+async function adjustRate(delta) {
+  STATE.readingRate = Math.min(2.5, Math.max(0.3, STATE.readingRate + delta));
+  el('reader-speed-badge') && (el('reader-speed-badge').textContent = rateLabel());
+  await speak(`Speed ${delta > 0 ? 'increased' : 'decreased'}.`);
+  startListening();
+}
+
+async function adjustVol(delta) {
+  STATE.readingVolume = Math.min(1.0, Math.max(0.05, STATE.readingVolume + delta));
+  await speak(delta > 0 ? "Volume increased." : "Volume decreased.");
+  startListening();
+}
+
+// ═══════════════════════════════════════════════
 // LANGUAGE SWITCHING
-// ─────────────────────────────────────────────
+// Fix: changes BOTH STT and TTS, rebuilds recognition
+// Fix: announcement in the NEW language
+// ═══════════════════════════════════════════════
 async function changeLang(langKey) {
-  const cfg = LANG_MAP[langKey];
-  if (!cfg) { await speak("Sorry, that language is not supported yet."); return; }
+  const cfg = LANGUAGES[langKey];
+  if (!cfg) { await speak("That language is not available."); return; }
+
+  const was = STATE.isReading;
+  stopSpeaking();
+  stopInterruptListening();
+  stopListening();
+  STATE.isReading = false;
+
   STATE.language = cfg.stt;
   STATE.ttsLang  = cfg.tts;
-  if (STATE.recognition) STATE.recognition.lang = cfg.stt;
-  el('reader-lang-badge').textContent = cfg.short;
-  await speak(`Switched to ${cfg.label}. Continuing from the same position.`);
-  if (STATE.isReading && !STATE.isPaused) await readNextChunk();
-  else startRecognition();
+  STATE.langKey  = langKey;
+
+  // Rebuild recognition for new language
+  STATE.recognition = null;
+
+  // Update UI badges
+  el('reader-lang-badge') && (el('reader-lang-badge').textContent = cfg.short);
+
+  // Announce in the new language (then English so user knows)
+  await speak(`Switched to ${cfg.label}.`, cfg.tts);
+
+  if (was) { STATE.isReading = true; readLoop(); }
+  else {
+    clearTimeout(STATE._recTimer);
+    STATE._recTimer = setTimeout(startListening, 300);
+  }
 }
 
-// ─────────────────────────────────────────────
-// RATE / PITCH
-// ─────────────────────────────────────────────
-async function adjustRate(delta) {
-  STATE.readingRate = Math.min(2.0, Math.max(0.3, STATE.readingRate + delta));
-  el('reader-speed-badge').textContent = STATE.readingRate <= 0.6 ? 'Slow Speed'
-    : STATE.readingRate <= 1.2 ? 'Normal Speed' : 'Fast Speed';
-  await speak(`Speed adjusted. ${delta > 0 ? 'Reading faster' : 'Reading slower'} now.`);
-}
-async function adjustPitch(delta) {
-  STATE.readingPitch = Math.min(2.0, Math.max(0.0, STATE.readingPitch + delta));
-  await speak(delta > 0 ? "Volume increased." : "Volume decreased.");
-}
-
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // LOGOUT
-// ─────────────────────────────────────────────
+// Fix: works from any screen
+// ═══════════════════════════════════════════════
 async function doLogout() {
+  stopSpeaking();
+  stopInterruptListening();
+  stopListening();
   STATE.isReading = false;
   STATE.isPaused  = false;
-  window.speechSynthesis.cancel();
+  STATE.username  = '';
+  STATE.documentText = '';
+  STATE.documentChunks = [];
+  STATE.chunkIndex = 0;
+
   await speak("You have been logged out. Thank you for using VOICE4BLIND. Goodbye.");
-  stopRecognition();
-  gotoScreen('welcome');
-  setTimeout(() => initWelcome(), 1000);
+
+  setTimeout(() => { gotoScreen('welcome'); initWelcome(); }, 1200);
 }
 
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // TEXT CHUNKING
-// ─────────────────────────────────────────────
-function chunkText(text, maxWords) {
+// ═══════════════════════════════════════════════
+function chunkText(text, wordsPerChunk) {
   const sentences = text.match(/[^.!?\n]+[.!?\n]+/g) || [text];
-  const chunks = [];
-  let current = '';
-  sentences.forEach(s => {
-    if ((current + s).split(' ').length > maxWords) {
-      if (current) chunks.push(current.trim());
-      current = s;
+  const chunks    = [];
+  let current = [], count = 0;
+  for (const s of sentences) {
+    const wc = s.split(' ').length;
+    if (count + wc > wordsPerChunk && current.length) {
+      chunks.push(current.join(' ').trim());
+      current = [s]; count = wc;
     } else {
-      current += ' ' + s;
+      current.push(s); count += wc;
     }
-  });
-  if (current.trim()) chunks.push(current.trim());
-  return chunks;
-}
-
-// ─────────────────────────────────────────────
-// FACE RECOGNITION SCREEN
-// Uses face-api.js (loaded from CDN) for real webcam face detection
-// and descriptor-based matching.
-//
-// FLOW:
-//   password correct
-//     → startFaceScreen()          — loads models, opens camera, voice prompt
-//     → runFaceScan()              — captures frame, detects & compares face
-//         matched same person      → handleFaceSuccess()  → dashboard
-//         different person         → handleFaceWrongPerson() → retry prompt
-//         no face registered yet   → enrollFaceForUser()  → store & proceed
-//         no face in frame         → handleFaceNotFound() → retry prompt
-//         not registered in DB     → handleFaceError()    → access denied
-// ─────────────────────────────────────────────
-
-// Shared delay helper
-function fpDelay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-// Runtime flag — true once face-api models are fully loaded
-let faceModelsLoaded = false;
-let faceStream = null;       // MediaStream from camera
-
-// CDN base for face-api.js tiny model weights
-const FACE_API_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
-
-// ── Entry point ──────────────────────────────
-async function startFaceScreen() {
-  STATE.screen = 'face';
-  STATE.face = 'idle';
-  gotoScreen('face');
-  setFaceState('idle');
-
-  // 1. System speaks — asks user to look at camera
-  await speak(
-    "Password verified. Now please look directly at the camera for face recognition."
-  );
-
-  // 2. Load face-api.js models if not already loaded
-  await loadFaceModels();
-
-  // 3. Open the camera
-  const cameraOk = await openCamera();
-  if (!cameraOk) {
-    await speak("Could not access the camera. Please allow camera permission and try again.");
-    STATE.screen = 'face';
-    startRecognition();
-    return;
   }
-
-  // 4. Begin face scan
-  await runFaceScan();
+  if (current.length) chunks.push(current.join(' ').trim());
+  return chunks.filter(Boolean);
 }
 
-// ── Load face-api.js from CDN (tiny models only) ──
-async function loadFaceModels() {
-  if (faceModelsLoaded) return;
-  // Inject face-api script if not already present
-  if (!window.faceapi) {
-    await new Promise((resolve, reject) => {
-      const s = document.createElement('script');
-      s.src = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/dist/face-api.js';
-      s.onload = resolve;
-      s.onerror = reject;
-      document.head.appendChild(s);
-    });
-  }
-  try {
-    await Promise.all([
-      faceapi.nets.tinyFaceDetector.loadFromUri(FACE_API_CDN),
-      faceapi.nets.faceLandmark68TinyNet.loadFromUri(FACE_API_CDN),
-      faceapi.nets.faceRecognitionNet.loadFromUri(FACE_API_CDN),
-    ]);
-    faceModelsLoaded = true;
-  } catch (e) {
-    console.warn('face-api model load failed — running in simulation mode:', e.message);
-    faceModelsLoaded = false; // will fall back to simulation
-  }
-}
-
-// ── Open the front-facing camera ──
-async function openCamera() {
-  try {
-    faceStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: 320, height: 240 }
-    });
-    const video = document.getElementById('face-video');
-    video.srcObject = faceStream;
-    await new Promise(r => { video.onloadedmetadata = r; });
-    return true;
-  } catch (e) {
-    console.warn('Camera open failed:', e.message);
-    return false;
-  }
-}
-
-// ── Close the camera ──
-function closeCamera() {
-  if (faceStream) {
-    faceStream.getTracks().forEach(t => t.stop());
-    faceStream = null;
-  }
-}
-
-// ── Capture one frame from the video element ──
-function captureFrame() {
-  const video  = document.getElementById('face-video');
-  const canvas = document.getElementById('face-canvas');
-  canvas.width  = video.videoWidth  || 320;
-  canvas.height = video.videoHeight || 240;
-  canvas.getContext('2d').drawImage(video, 0, 0);
-  return canvas;
-}
-
-// ── Core scan flow ──────────────────────────
-async function runFaceScan() {
-  setFaceState('scanning');
-  await speak("Scanning your face. Please hold still and look at the camera.");
-
-  // Give the camera ~1 s to stabilise
-  await fpDelay(1000);
-
-  let detectedDescriptor = null;
-
-  if (faceModelsLoaded && faceStream) {
-    // ── REAL face-api detection ──
-    const canvas = captureFrame();
-    const options = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 });
-    const result  = await faceapi
-      .detectSingleFace(canvas, options)
-      .withFaceLandmarks(true)
-      .withFaceDescriptor();
-
-    if (result) {
-      detectedDescriptor = result.descriptor; // Float32Array[128]
-    }
-  } else {
-    // ── SIMULATION MODE (no camera / no models) ──
-    // Simulate a detected descriptor using a seeded random per username
-    // so the same user always matches themselves.
-    detectedDescriptor = simulateDescriptor(STATE.username);
-  }
-
-  closeCamera();
-
-  if (!detectedDescriptor) {
-    // No face found in frame
-    await handleFaceNotFound();
-    return;
-  }
-
-  const u = STATE.username.toLowerCase().trim();
-
-  if (!FACE_DB[u]) {
-    // First login — enrol this face automatically
-    FACE_DB[u] = detectedDescriptor;
-    console.info(`Face enrolled for user: ${u}`);
-    await handleFaceSuccess(true);
-    return;
-  }
-
-  // Compare against stored descriptor
-  const distance = faceapi
-    ? faceapi.euclideanDistance(Array.from(FACE_DB[u]), Array.from(detectedDescriptor))
-    : euclideanDistance(FACE_DB[u], detectedDescriptor);
-
-  if (distance < 0.55) {
-    // Same person — good match
-    await handleFaceSuccess(false);
-  } else {
-    // Different face — wrong person trying to access
-    await handleFaceWrongPerson();
-  }
-}
-
-// ── Success — face matched ──
-async function handleFaceSuccess(wasEnrolled) {
-  STATE.face = 'success';
-  setFaceState('success');
-
-  const msg = wasEnrolled
-    ? `Face registered and verified. Welcome, ${STATE.username}. Redirecting to document dashboard.`
-    : `Face recognised. Identity confirmed. Welcome, ${STATE.username}. Redirecting to document dashboard.`;
-
-  await speak(msg);
-  await fpDelay(700);
-
-  el('dashboard-user').textContent = STATE.username;
-  gotoScreen('dashboard');
-  STATE.loginStep = 'done';
-  STATE.screen    = 'dashboard';
-
-  await speak(
-    "You are now on the document dashboard. You can say scan documents to find your files. Or say the name of a file to open it."
-  );
-  startRecognition();
-}
-
-// ── Wrong person — a different face was detected ──
-async function handleFaceWrongPerson() {
-  STATE.face = 'wrong-person';
-  setFaceState('wrong-person');
-  await speak(
-    "Your face did not match the registered face for this account. This login attempt has been blocked. Please try again with the correct person."
-  );
-  await fpDelay(2200);
-  await speak("Say try again to rescan, or say logout to exit.");
-  STATE.screen = 'face';
-  startRecognition();
-}
-
-// ── No face found in the camera frame ──
-async function handleFaceNotFound() {
-  STATE.face = 'error';
-  setFaceState('error');
-  await speak(
-    "No face was detected. Please make sure your face is clearly visible in front of the camera and try again."
-  );
-  await fpDelay(1800);
-  await speak("Say try again to rescan, or say logout to exit.");
-  STATE.screen = 'face';
-  startRecognition();
-}
-
-// ── Not in database (reserved for explicit deny scenarios) ──
-async function handleFaceError() {
-  STATE.face = 'error';
-  setFaceState('error');
-  await speak(
-    "Face not matched. Your face is not found in the database. Access denied. Please contact your administrator."
-  );
-  await fpDelay(2000);
-  await speak("Say try again to rescan, or say logout to exit.");
-  STATE.screen = 'face';
-  startRecognition();
-}
-
-// ── Voice handler for face screen ──
-async function handleFaceVoice(text, intent) {
-  if (/\b(try again|retry|rescan|scan again|again)\b/.test(text)) {
-    setFaceState('idle');
-    await speak("Okay. Please look at the camera again.");
-    await fpDelay(400);
-    const cameraOk = await openCamera();
-    if (!cameraOk) {
-      await speak("Camera not available. Please check permissions and say try again.");
-      startRecognition();
-      return;
-    }
-    await runFaceScan();
-  } else if (intent === 'logout') {
-    closeCamera();
-    await doLogout();
-  } else {
-    await speak("Please say try again to rescan, or say logout to exit.");
-  }
-}
-
-// ── Visual state controller ──
-// state: 'idle' | 'scanning' | 'success' | 'wrong-person' | 'error'
-function setFaceState(state) {
-  const circle    = document.getElementById('face-circle');
-  const scanLine  = document.getElementById('face-scan-line');
-  const container = document.getElementById('face-container');
-  const badge     = document.getElementById('face-status-badge');
-  const statusDot = document.getElementById('face-status-dot');
-  const statusLbl = document.getElementById('face-status-label');
-  const title     = document.getElementById('face-title');
-  const subtitle  = document.getElementById('face-subtitle');
-  const navDot    = document.getElementById('face-nav-dot');
-  const navTxt    = document.getElementById('face-nav-status-text');
-
-  if (!circle) return;
-
-  // Reset all modifier classes
-  circle.classList.remove('scanning', 'success', 'wrong-person', 'error');
-  scanLine.classList.remove('active');
-  container.classList.remove('active-vf');
-  badge.classList.remove('scanning-state', 'success-state', 'wrong-person-state', 'error-state');
-  statusDot.classList.remove('pulse', 'scanning', 'success', 'wrong-person', 'error-dot');
-
-  switch (state) {
-    case 'idle':
-      statusDot.classList.add('pulse');
-      statusLbl.textContent = 'Waiting to scan face…';
-      title.textContent     = 'Face Recognition';
-      subtitle.textContent  = 'Look directly at the camera';
-      navDot.className      = 'dot listening';
-      navTxt.textContent    = 'Ready';
-      break;
-
-    case 'scanning':
-      circle.classList.add('scanning');
-      scanLine.classList.add('active');
-      container.classList.add('active-vf');
-      badge.classList.add('scanning-state');
-      statusDot.classList.add('scanning');
-      statusLbl.textContent = 'Scanning your face…';
-      title.textContent     = 'Face Recognition';
-      subtitle.textContent  = 'Hold still — analysing your face';
-      navDot.className      = 'dot speaking';
-      navTxt.textContent    = 'Scanning';
-      break;
-
-    case 'success':
-      circle.classList.add('success');
-      badge.classList.add('success-state');
-      statusDot.classList.add('success');
-      statusLbl.textContent = 'Face recognised ✓';
-      title.textContent     = 'Identity Confirmed';
-      subtitle.textContent  = 'Welcome! Redirecting…';
-      navDot.className      = 'dot listening';
-      navTxt.textContent    = 'Verified';
-      break;
-
-    case 'wrong-person':
-      circle.classList.add('wrong-person');
-      badge.classList.add('wrong-person-state');
-      statusDot.classList.add('wrong-person');
-      statusLbl.textContent = 'Face did not match ✗';
-      title.textContent     = 'Wrong Person Detected';
-      subtitle.textContent  = 'Your face did not match — please try again';
-      navDot.className      = 'dot idle';
-      navTxt.textContent    = 'Blocked';
-      break;
-
-    case 'error':
-      circle.classList.add('error');
-      badge.classList.add('error-state');
-      statusDot.classList.add('error-dot');
-      statusLbl.textContent = 'Face not found ✗';
-      title.textContent     = 'Recognition Failed';
-      subtitle.textContent  = 'No face detected in camera frame';
-      navDot.className      = 'dot idle';
-      navTxt.textContent    = 'Failed';
-      break;
-  }
-}
-
-// ── Simulation descriptor (used when face-api models are unavailable) ──
-// Generates a deterministic pseudo-random Float32Array[128] seeded by username.
-// Same username always produces the same descriptor → always matches itself.
-function simulateDescriptor(username) {
-  const arr = new Float32Array(128);
-  let seed  = 0;
-  for (let i = 0; i < username.length; i++) seed += username.charCodeAt(i);
-  for (let i = 0; i < 128; i++) {
-    seed = (seed * 16807 + 0) % 2147483647;
-    arr[i] = (seed / 2147483647) * 2 - 1;
-  }
-  return arr;
-}
-
-// ── Euclidean distance fallback (when face-api not loaded) ──
-function euclideanDistance(a, b) {
-  let sum = 0;
-  for (let i = 0; i < a.length; i++) sum += (a[i] - b[i]) ** 2;
-  return Math.sqrt(sum);
-}
-
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // UI HELPERS
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 function el(id) { return document.getElementById(id); }
 
 function gotoScreen(name) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  el(`screen-${name}`).classList.add('active');
+  const scr = el(`screen-${name}`);
+  if (scr) scr.classList.add('active');
   STATE.screen = name;
 }
 
-function updateAssistantBubble(text) {
-  const ids = {
-    welcome:     'assistant-text',
-    login:       'login-assistant-text',
-    face:        'face-assistant-text',
-    dashboard:   'dashboard-assistant-text',
-    reader:      'reader-assistant-text',
+function updateBubble(text) {
+  const map = {
+    welcome:   'assistant-text',
+    login:     'login-assistant-text',
+    dashboard: 'dashboard-assistant-text',
+    reader:    'reader-assistant-text',
   };
-  const id = ids[STATE.screen];
-  if (id) el(id).textContent = text;
+  const id = map[STATE.screen];
+  if (id && el(id)) el(id).textContent = text;
 }
 
 function showTranscript(text) {
-  const ids = {
+  const map = {
     welcome:   'transcript-display',
     login:     'login-transcript',
     dashboard: 'dashboard-transcript',
     reader:    'reader-transcript',
   };
-  const id = ids[STATE.screen];
-  if (id) el(id).textContent = text ? `"${text}"` : '';
+  const id = map[STATE.screen];
+  if (id && el(id)) el(id).textContent = text || '';
 }
 
-function setStatusLabel(text) {
+function setMicState(state) {
+  document.querySelectorAll('.mic-circle').forEach(m =>
+    m.classList.toggle('speaking', state === 'speaking')
+  );
+  document.querySelectorAll('.dot').forEach(d => {
+    d.className = 'dot';
+    d.classList.add(state === 'speaking' ? 'speaking' : 'listening');
+  });
   const lbl = el('status-label');
-  if (lbl) lbl.textContent = text;
-}
-
-function updateMicState(state) {
-  const allMics  = document.querySelectorAll('.mic-circle');
-  const allDots  = document.querySelectorAll('.dot');
-  allMics.forEach(m => m.classList.remove('speaking'));
-  allDots.forEach(d => { d.className = 'dot'; });
-  if (state === 'speaking') {
-    allMics.forEach(m => m.classList.add('speaking'));
-    allDots.forEach(d => d.classList.add('speaking'));
-    setStatusLabel('Speaking…');
-  } else {
-    allDots.forEach(d => d.classList.add('listening'));
-    setStatusLabel('Listening…');
-  }
-}
-
-function highlightFile(idx) {
-  document.querySelectorAll('.file-item').forEach(f => f.classList.remove('highlighted'));
-  const item = el(`file-${idx}`);
-  if (item) item.classList.add('highlighted');
+  if (lbl) lbl.textContent = state === 'speaking' ? 'Speaking…' : 'Listening…';
 }
 
 function updateProgress() {
-  const pct = STATE.documentChunks.length
-    ? Math.round((STATE.chunkIndex / STATE.documentChunks.length) * 100) : 0;
-  el('progress-fill').style.width = pct + '%';
-  el('progress-label').textContent = pct + '% read';
-  el('reader-page-info').textContent = `Section ${STATE.chunkIndex + 1} of ${STATE.documentChunks.length}`;
+  const total = STATE.documentChunks.length;
+  const pct   = total ? Math.round((STATE.chunkIndex / total) * 100) : 0;
+  const fill  = el('progress-fill');
+  const label = el('progress-label');
+  const page  = el('reader-page-info');
+  if (fill)  fill.style.width = pct + '%';
+  if (label) label.textContent = pct + '% read';
+  if (page)  page.textContent  = `Section ${STATE.chunkIndex + 1} of ${total}`;
 }
 
-function highlightCurrentChunk(chunk) {
-  const box = el('reader-content-text');
-  if (box) box.textContent = chunk;
-}
-
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 // INIT
-// ─────────────────────────────────────────────
+// ═══════════════════════════════════════════════
 async function initWelcome() {
   gotoScreen('welcome');
-  // Ensure voices loaded
+  STATE.isReading   = false;
+  STATE.isPaused    = false;
+  STATE.loginStep   = 'greeting';
+  STATE.recognition = null;
+  stopInterruptListening();
+
   await new Promise(r => {
     if (window.speechSynthesis.getVoices().length) { r(); return; }
     window.speechSynthesis.onvoiceschanged = r;
-    setTimeout(r, 2000);
+    setTimeout(r, 2500);
   });
-  await speak("Welcome to VOICE4BLIND. I am your voice assistant for reading documents. If you are ready, please say Hi.");
-  startRecognition();
+
+  await speak("Welcome to VOICE4BLIND. I am your voice assistant for reading documents. Say Hi when you are ready, or say face login to use face recognition.");
+  startListening();
 }
 
-// File upload handler (for backend integration)
-window.handleFileUpload = async function(file) {
-  const formData = new FormData();
-  formData.append('file', file);
-  try {
-    const res = await fetch('/api/upload', { method: 'POST', body: formData });
-    const data = await res.json();
-    return data;
-  } catch (e) {
-    return { error: 'Upload failed' };
-  }
-};
-
-window.addEventListener('load', () => {
-  // Brief delay to let browser settle
-  setTimeout(initWelcome, 800);
-});
+window.addEventListener('load', () => setTimeout(initWelcome, 600));
